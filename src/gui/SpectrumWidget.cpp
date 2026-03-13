@@ -29,10 +29,11 @@ void SpectrumWidget::setFrequencyRange(double centerMhz, double bandwidthMhz)
 
 void SpectrumWidget::setDbmRange(float minDbm, float maxDbm)
 {
-    m_wfMinDbm     = minDbm;
-    m_wfMaxDbm     = maxDbm;
+    // Spectrum (FFT plot) uses the full radio range.
     m_refLevel     = maxDbm;
     m_dynamicRange = maxDbm - minDbm;
+    // Waterfall colour range stays at its own focused defaults
+    // (m_wfMinDbm / m_wfMaxDbm) for better contrast.
     update();
 }
 
@@ -59,9 +60,18 @@ void SpectrumWidget::updateSpectrum(const QVector<float>& binsDbm)
     }
     m_bins = binsDbm;
 
-    if (!m_waterfall.isNull())
+    // Only use FFT for waterfall if no native waterfall tiles are arriving.
+    if (!m_hasNativeWaterfall && !m_waterfall.isNull())
         pushWaterfallRow(binsDbm, m_waterfall.width());
 
+    update();
+}
+
+void SpectrumWidget::updateWaterfallRow(const QVector<float>& binsDbm)
+{
+    m_hasNativeWaterfall = true;
+    if (!m_waterfall.isNull())
+        pushWaterfallRow(binsDbm, m_waterfall.width());
     update();
 }
 
@@ -129,10 +139,30 @@ void SpectrumWidget::resizeEvent(QResizeEvent* ev)
 
 QRgb SpectrumWidget::dbmToRgb(float dbm) const
 {
-    const float t   = qBound(0.0f, (dbm - m_wfMinDbm) / (m_wfMaxDbm - m_wfMinDbm), 1.0f);
-    const float hue = (1.0f - t) * 240.0f;
-    const float val = qBound(0.08f, t * 5.0f + 0.08f, 1.0f);
-    return QColor::fromHsvF(hue / 360.0f, 1.0f, val).rgba();
+    // Normalise into [0, 1] over the waterfall display range.
+    const float t = qBound(0.0f, (dbm - m_wfMinDbm) / (m_wfMaxDbm - m_wfMinDbm), 1.0f);
+
+    // Multi-stop gradient: black → blue → cyan → green → yellow → red
+    struct Stop { float pos; int r, g, b; };
+    static constexpr Stop stops[] = {
+        {0.00f,   0,   0,   0},   // black  (noise floor)
+        {0.15f,   0,   0, 128},   // dark blue
+        {0.30f,   0,  64, 255},   // blue
+        {0.45f,   0, 200, 255},   // cyan
+        {0.60f,   0, 220,   0},   // green
+        {0.80f, 255, 255,   0},   // yellow
+        {1.00f, 255,   0,   0},   // red     (strong signal)
+    };
+    static constexpr int N = sizeof(stops) / sizeof(stops[0]);
+
+    // Find the two stops bracketing t and interpolate.
+    int i = 0;
+    while (i < N - 2 && stops[i + 1].pos < t) ++i;
+    const float seg = (t - stops[i].pos) / (stops[i + 1].pos - stops[i].pos);
+    const int r = static_cast<int>(stops[i].r + seg * (stops[i + 1].r - stops[i].r));
+    const int g = static_cast<int>(stops[i].g + seg * (stops[i + 1].g - stops[i].g));
+    const int b = static_cast<int>(stops[i].b + seg * (stops[i + 1].b - stops[i].b));
+    return qRgb(qBound(0, r, 255), qBound(0, g, 255), qBound(0, b, 255));
 }
 
 // ─── Waterfall update ─────────────────────────────────────────────────────────

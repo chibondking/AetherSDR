@@ -26,7 +26,8 @@ namespace AetherSDR {
 //   0x0123 — SL_VITA_IF_NARROW_REDUCED_BW   — int16 mono, big-endian
 //   0x8005 — SL_VITA_OPUS_CLASS             — Opus compressed (not yet handled)
 //
-// Panadapter FFT: stream ID 0x40xxxxxx, PCC = SL_VITA_FFT_CLASS (0x8003)
+// Panadapter FFT: PCC = 0x8003 (SL_VITA_FFT_CLASS)
+// Waterfall tile: PCC = 0x8004 (SL_VITA_WATERFALL_CLASS)
 
 PanadapterStream::PanadapterStream(QObject* parent)
     : QObject(parent)
@@ -62,6 +63,24 @@ bool PanadapterStream::start(RadioConnection* conn)
 
     m_localPort = m_socket.localPort();
     qDebug() << "PanadapterStream: bound to UDP port" << m_localPort;
+
+    // Send a one-byte UDP registration datagram to the radio's VITA-49 port.
+    // The radio learns our IP:port from the source address of this datagram.
+    // This is required on firmware v1.4.0.0 where the TCP "client udpport"
+    // command may return 0x50001000 ("command not supported").
+    const QHostAddress radioAddr = conn->radioAddress();
+    if (!radioAddr.isNull()) {
+        const QByteArray reg(1, '\x00');
+        const qint64 sent = m_socket.writeDatagram(reg, radioAddr, 4992);
+        if (sent == 1)
+            qDebug() << "PanadapterStream: sent UDP registration to"
+                     << radioAddr.toString() << ":4992";
+        else
+            qWarning() << "PanadapterStream: UDP registration send failed:"
+                       << m_socket.errorString();
+    } else {
+        qWarning() << "PanadapterStream: radio address unknown — skipping UDP registration";
+    }
 
     m_conn = conn;
     return true;
@@ -115,30 +134,37 @@ void PanadapterStream::processDatagram(const QByteArray& data)
                  << "trailer=" << hasTrailer;
     }
 
-    // Remote audio — float32 stereo, big-endian (SL_VITA_IF_NARROW_CLASS)
-    if (pcc == PCC_IF_NARROW) {
+    // Route by PacketClassCode
+    switch (pcc) {
+    case PCC_IF_NARROW:
         decodeNarrowAudio(raw, data.size(), hasTrailer);
         return;
-    }
-
-    // DAX audio reduced-BW — int16 mono, big-endian (SL_VITA_IF_NARROW_REDUCED_BW_CLASS)
-    if (pcc == PCC_IF_NARROW_REDUCED) {
+    case PCC_IF_NARROW_REDUCED:
         decodeReducedBwAudio(raw, data.size(), hasTrailer);
         return;
+    case PCC_FFT:
+        decodeFFT(raw, data.size(), hasTrailer);
+        return;
+    case PCC_WATERFALL:
+        decodeWaterfallTile(raw, data.size(), hasTrailer);
+        return;
+    default:
+        break;
     }
+}
 
-    // Only process panadapter FFT streams (0x40xxxxxx).
-    if ((streamId & 0xFF000000u) != 0x40000000u) return;
+// ─── FFT decode ──────────────────────────────────────────────────────────────
 
-    // ── FFT sub-header (bytes 28–39) ──────────────────────────────────────────
-    // From VitaFFTPacket.cs (FlexLib reference):
+void PanadapterStream::decodeFFT(const uchar* raw, int totalBytes, bool hasTrailer)
+{
+    // FFT sub-header (bytes 28–39):
     //   uint16 start_bin_index
     //   uint16 num_bins
     //   uint16 bin_size          (bytes per bin, always 2)
     //   uint16 total_bins_in_frame
     //   uint32 frame_index
     static constexpr int FFT_SUBHEADER_BYTES = 12;
-    if (data.size() < VITA49_HEADER_BYTES + FFT_SUBHEADER_BYTES) return;
+    if (totalBytes < VITA49_HEADER_BYTES + FFT_SUBHEADER_BYTES) return;
 
     const uchar* sub = raw + VITA49_HEADER_BYTES;
     const quint16 startBin   = qFromBigEndian<quint16>(sub + 0);
@@ -151,7 +177,7 @@ void PanadapterStream::processDatagram(const QByteArray& data)
 
     const int binDataOffset = VITA49_HEADER_BYTES + FFT_SUBHEADER_BYTES;
     int binDataBytes = numBins * binSize;
-    const int available = data.size() - binDataOffset - (hasTrailer ? 4 : 0);
+    const int available = totalBytes - binDataOffset - (hasTrailer ? 4 : 0);
     if (available < binDataBytes) {
         binDataBytes = available;
         if (binDataBytes <= 0) return;
@@ -172,7 +198,7 @@ void PanadapterStream::processDatagram(const QByteArray& data)
 
     if (!m_frame.isComplete()) return;
 
-    // ── Convert to dBm and emit ───────────────────────────────────────────────
+    // Convert to dBm and emit
     const float range = m_maxDbm - m_minDbm;
     const int   count = m_frame.buf.size();
     QVector<float> bins(count);
@@ -180,6 +206,60 @@ void PanadapterStream::processDatagram(const QByteArray& data)
         bins[i] = m_minDbm + (static_cast<float>(m_frame.buf[i]) / 65535.0f) * range;
 
     emit spectrumReady(bins);
+}
+
+// ─── Waterfall tile decode ───────────────────────────────────────────────────
+//
+// Tile sub-header (36 bytes, big-endian, at byte 28):
+//   int64  FrameLowFreq      (Hz × 1e6 — i.e. VitaFrequency)
+//   int64  BinBandwidth      (Hz × 1e6)
+//   uint32 LineDurationMS
+//   uint16 Width             (bins per row)
+//   uint16 Height            (rows in this tile)
+//   uint32 Timecode          (frame index for reassembly)
+//   uint32 AutoBlackLevel
+//   uint16 TotalBinsInFrame  (total bins if fragmented across packets)
+//   uint16 FirstBinIndex
+//
+// Payload: Width × Height uint16 values (big-endian).
+// Conversion: treat as signed int16, divide by 128.  Typical noise floor
+// ~96-106, signal peaks ~110-115.  Colour-mapped in SpectrumWidget.
+
+void PanadapterStream::decodeWaterfallTile(const uchar* raw, int totalBytes, bool hasTrailer)
+{
+    static constexpr int TILE_SUBHEADER_BYTES = 36;
+    if (totalBytes < VITA49_HEADER_BYTES + TILE_SUBHEADER_BYTES) return;
+
+    const uchar* sub = raw + VITA49_HEADER_BYTES;
+
+    // We only need Width and Height to unpack the tile data.
+    const quint16 tileWidth  = qFromBigEndian<quint16>(sub + 20);
+    const quint16 tileHeight = qFromBigEndian<quint16>(sub + 22);
+
+    if (tileWidth == 0 || tileHeight == 0) return;
+
+    const int payloadOffset = VITA49_HEADER_BYTES + TILE_SUBHEADER_BYTES;
+    const int payloadBytes  = totalBytes - payloadOffset - (hasTrailer ? 4 : 0);
+    const int expectedBytes = tileWidth * tileHeight * 2;
+    const int usableBytes   = qMin(payloadBytes, expectedBytes);
+    const int usableSamples = usableBytes / 2;
+    if (usableSamples < tileWidth) return;  // need at least one full row
+
+    const uchar* payload = raw + payloadOffset;
+
+    // Emit one row at a time — row 0 is the oldest line in the tile.
+    const int fullRows = usableSamples / tileWidth;
+    QVector<float> row(tileWidth);
+
+    // Waterfall tile values: treat uint16 as signed int16, divide by 128.
+    for (int r = 0; r < fullRows; ++r) {
+        const uchar* rowData = payload + r * tileWidth * 2;
+        for (int i = 0; i < tileWidth; ++i) {
+            const auto raw16 = static_cast<qint16>(qFromBigEndian<quint16>(rowData + i * 2));
+            row[i] = static_cast<float>(raw16) / 128.0f;
+        }
+        emit waterfallRowReady(row);
+    }
 }
 
 // ─── Audio decode ─────────────────────────────────────────────────────────────

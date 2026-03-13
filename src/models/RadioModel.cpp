@@ -74,9 +74,10 @@ void RadioModel::onConnected()
     emit connectionStateChanged(true);
 
     // Full command sequence — each step waits for its R response before sending the next.
-    // sub slice all → sub tx all → sub atu all → sub meter all → sub audio all
-    //   → client gui → client udpport N → slice list → flush pending commands
+    // sub slice all → sub pan all → sub tx all → sub atu all → sub meter all → sub audio all
+    //   → client gui → client program → [UDP registration] → client udpport N → slice list
     m_connection.sendCommand("sub slice all", [this](int, const QString&) {
+      m_connection.sendCommand("sub pan all", [this](int, const QString&) {
       m_connection.sendCommand("sub tx all", [this](int, const QString&) {
         m_connection.sendCommand("sub atu all", [this](int, const QString&) {
           m_connection.sendCommand("sub meter all", [this](int, const QString&) {
@@ -85,8 +86,13 @@ void RadioModel::onConnected()
         if (code != 0)
             qWarning() << "RadioModel: client gui failed, code" << Qt::hex << code;
 
+        // Identify this client to the radio; station name allows nCAT/nDAX to
+        // attach to this instance rather than creating a separate one.
+        m_connection.sendCommand("client program AetherSDR");
+        m_connection.sendCommand("client station AetherSDR");
+
         if (!m_panStream.isRunning())
-            m_panStream.start(&m_connection);
+            m_panStream.start(&m_connection);  // also sends one-byte UDP registration
 
         const quint16 udpPort = m_panStream.localPort();
         m_connection.sendCommand(
@@ -138,6 +144,7 @@ void RadioModel::onConnected()
           }); // sub meter all
         }); // sub atu all
       }); // sub tx all
+      }); // sub pan all
     }); // sub slice all
 }
 
@@ -146,7 +153,9 @@ void RadioModel::onDisconnected()
     qDebug() << "RadioModel: disconnected";
     m_panStream.stop();
     m_panId.clear();
+    m_waterfallId.clear();
     m_panResized = false;
+    m_wfConfigured = false;
     emit connectionStateChanged(false);
 
     if (!m_intentionalDisconnect && !m_lastInfo.address.isNull()) {
@@ -205,6 +214,19 @@ void RadioModel::onStatusReceived(const QString& object,
         if (m.hasMatch() && m_panId.isEmpty())
             m_panId = m.captured(1);
         handlePanadapterStatus(kvs);
+        return;
+    }
+
+    // "display waterfall 0x42000000 auto_black=1 ..."
+    static const QRegularExpression wfRe(R"(^display waterfall\s+(0x[0-9A-Fa-f]+)$)");
+    if (object.startsWith("display waterfall")) {
+        const auto m = wfRe.match(object);
+        if (m.hasMatch() && m_waterfallId.isEmpty())
+            m_waterfallId = m.captured(1);
+        if (!m_wfConfigured && !m_waterfallId.isEmpty() && m_connection.isConnected()) {
+            m_wfConfigured = true;
+            configureWaterfall();
+        }
         return;
     }
 
@@ -311,14 +333,51 @@ void RadioModel::configurePan()
 {
     if (m_panId.isEmpty()) return;
     m_connection.sendCommand(
-        QString("display pan set %1 fps=25").arg(m_panId),
+        QString("display pan set %1 fps=25 average=0").arg(m_panId),
         [this](int code, const QString&) {
             if (code != 0)
-                qWarning() << "RadioModel: display pan set fps=25 failed, code" << Qt::hex << code;
+                qWarning() << "RadioModel: display pan set fps/average failed, code" << Qt::hex << code;
+
+            // Request higher-resolution FFT bins.  Firmware v1.4.0.0 may reject
+            // x_pixels with 0x5000002D but the attempt is harmless.
             if (!m_panId.isEmpty())
                 m_connection.sendCommand(
-                    QString("display pan set %1 average=0").arg(m_panId));
+                    QString("display pan set %1 x_pixels=1024").arg(m_panId),
+                    [](int code2, const QString&) {
+                        if (code2 != 0)
+                            qDebug() << "RadioModel: display pan set x_pixels=1024 rejected, code"
+                                     << Qt::hex << code2 << "(expected on v1.4.0.0)";
+                    });
         });
+}
+
+void RadioModel::configureWaterfall()
+{
+    if (m_waterfallId.isEmpty()) return;
+
+    // Disable automatic black-level and set a fixed threshold.
+    // FlexLib uses "display panafall set" addressed to the waterfall stream ID.
+    const QString cmd = QString("display panafall set %1 auto_black=0 black_level=15 color_gain=50")
+                            .arg(m_waterfallId);
+    m_connection.sendCommand(cmd, [this](int code, const QString&) {
+        if (code != 0) {
+            qDebug() << "RadioModel: display panafall set waterfall failed, code"
+                     << Qt::hex << code << "— trying display waterfall set";
+            // Fallback for firmware that doesn't support panafall addressing
+            m_connection.sendCommand(
+                QString("display waterfall set %1 auto_black=0 black_level=15 color_gain=50")
+                    .arg(m_waterfallId),
+                [](int code2, const QString&) {
+                    if (code2 != 0)
+                        qWarning() << "RadioModel: display waterfall set also failed, code"
+                                   << Qt::hex << code2;
+                    else
+                        qDebug() << "RadioModel: waterfall configured via display waterfall set";
+                });
+        } else {
+            qDebug() << "RadioModel: waterfall configured (auto_black=0 black_level=15 color_gain=50)";
+        }
+    });
 }
 
 // ─── Standalone mode: create panadapter + slice ───────────────────────────────

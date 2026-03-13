@@ -32,6 +32,11 @@ public:
     // Feed a new FFT frame. bins are scaled dBm values.
     void updateSpectrum(const QVector<float>& binsDbm);
 
+    // Feed a single waterfall row from a VITA-49 waterfall tile.
+    // When waterfall tile data is available, this is used instead of
+    // the FFT-derived waterfall rows from updateSpectrum().
+    void updateWaterfallRow(const QVector<float>& binsDbm);
+
     // Update the dBm range used for the waterfall colour map and spectrum Y axis.
     void setDbmRange(float minDbm, float maxDbm);
 
@@ -82,12 +87,18 @@ private:
     // Tuning step size for click-snap and wheel scroll (Hz)
     int m_stepHz{100};
 
-    // Waterfall colour range (dBm)
-    float m_wfMinDbm{-130.0f};
-    float m_wfMaxDbm{-20.0f};
+    // Waterfall colour range — maps tile values (int16/128) to colour.
+    // Observed: noise floor ~96-106, signal peaks ~110-115.
+    float m_wfMinDbm{104.0f};
+    float m_wfMaxDbm{120.0f};
 
     // Scrolling waterfall image (Format_RGB32)
     QImage m_waterfall;
+
+    // True once we receive native waterfall tile data (PCC 0x8004).
+    // When set, updateSpectrum() skips pushing FFT rows to the waterfall
+    // because the radio provides dedicated waterfall tiles.
+    bool m_hasNativeWaterfall{false};
 
     static constexpr float SMOOTH_ALPHA    = 0.35f;
     // Fraction of the panadapter area (above freq scale) used for spectrum

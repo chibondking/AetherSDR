@@ -10,10 +10,11 @@ class RadioConnection;
 
 // Receives all VITA-49 UDP datagrams from the radio on the single "client udpport"
 // and routes them by PacketClassCode (bytes 14-15 of the VITA-49 class ID):
-//   • PCC 0x03E3 → narrow audio, float32 stereo big-endian → audioDataReady()
-//   • PCC 0x0123 → narrow audio reduced-BW, int16 mono big-endian → audioDataReady()
-//   • stream ID 0x40xxxxxx  → FFT bins → spectrumReady()
-//   • everything else       → silently dropped
+//   • PCC 0x03E3 → narrow audio, float32 stereo big-endian  → audioDataReady()
+//   • PCC 0x0123 → narrow audio reduced-BW, int16 mono BE   → audioDataReady()
+//   • PCC 0x8003 → panadapter FFT bins                      → spectrumReady()
+//   • PCC 0x8004 → waterfall tiles (Width×Height uint16)    → waterfallRowReady()
+//   • everything else → silently dropped
 //
 // All packets from the radio use ExtDataWithStream (VITA-49 type 3), not IFDataWithStream.
 //
@@ -44,6 +45,9 @@ public:
 
 signals:
     void spectrumReady(const QVector<float>& binsDbm);
+    // One row of waterfall data (dBm values, Width bins).
+    // May be emitted multiple times per tile (once per Height row).
+    void waterfallRowReady(const QVector<float>& binsDbm);
     // Raw PCM payload (header stripped) from IF-Data (audio) VITA-49 packets.
     // Format: 16-bit signed, stereo, 24 kHz, little-endian.
     void audioDataReady(const QByteArray& pcm);
@@ -53,12 +57,16 @@ private slots:
 
 private:
     void processDatagram(const QByteArray& data);
+    void decodeFFT(const uchar* raw, int totalBytes, bool hasTrailer);
+    void decodeWaterfallTile(const uchar* raw, int totalBytes, bool hasTrailer);
     void decodeNarrowAudio(const uchar* raw, int totalBytes, bool hasTrailer);
     void decodeReducedBwAudio(const uchar* raw, int totalBytes, bool hasTrailer);
 
-    // PacketClassCodes for audio streams (from FlexLib VitaFlex.cs)
+    // PacketClassCodes (from FlexLib VitaFlex.cs)
     static constexpr quint16 PCC_IF_NARROW         = 0x03E3u; // float32 stereo, big-endian
     static constexpr quint16 PCC_IF_NARROW_REDUCED = 0x0123u; // int16 mono, big-endian
+    static constexpr quint16 PCC_FFT               = 0x8003u; // panadapter FFT bins
+    static constexpr quint16 PCC_WATERFALL         = 0x8004u; // waterfall tiles
 
     // Frame assembly: a VITA-49 FFT frame may arrive in multiple UDP packets.
     // Each packet carries start_bin_index + num_bins so we can stitch them.

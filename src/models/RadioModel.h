@@ -77,6 +77,7 @@ private:
     void handlePanadapterStatus(const QMap<QString, QString>& kvs);
 
     void configurePan();
+    void configureWaterfall();
 
     // Standalone mode: create a panadapter then attach a slice to it.
     void createDefaultSlice(const QString& freqMhz = "14.225000",
@@ -96,7 +97,9 @@ private:
     double  m_panCenterMhz{14.225};
     double  m_panBandwidthMhz{0.200};
     QString m_panId;             // e.g. "0x40000000", empty until first status
+    QString m_waterfallId;       // e.g. "0x42000000", from display waterfall status
     bool    m_panResized{false}; // true once we've sent the resize command
+    bool    m_wfConfigured{false};
 
     QList<SliceModel*> m_slices;
 

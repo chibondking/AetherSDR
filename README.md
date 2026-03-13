@@ -3,7 +3,7 @@
 A Linux-native SmartSDR-compatible client for FlexRadio Systems transceivers,
 built with **Qt6** and **C++20**.
 
-Current version: **0.1.3**
+Current version: **0.1.4**
 
 ---
 
@@ -23,6 +23,7 @@ Current version: **0.1.3**
 | Mode selector (USB/LSB/CW/AM/FM/DIG…) | ✅ |
 | Panadapter VITA-49 UDP stream receiver | ✅ |
 | Panadapter spectrum widget (FFT bins) | ✅ |
+| Waterfall display (native VITA-49 tiles, PCC 0x8004) | ✅ |
 | Panadapter dBm range auto-calibrated from radio | ✅ |
 | Audio RX via VITA-49 PCC routing + Qt Multimedia | ✅ |
 | RX applet — antenna select (RX/TX), filter presets, AGC mode+threshold | ✅ |
@@ -78,7 +79,9 @@ src/
 
  UDP VITA-49       ┌─────────────────────┐   FFT bins (PCC 0x8003)
  ──────────────────▶  PanadapterStream   │──────────────────────────▶ SpectrumWidget
-  (port 4991)      │  routes by PCC      │   audio PCM  (PCC 0x03E3)
+  (port 4991)      │  routes by PCC      │   waterfall  (PCC 0x8004)      ↑
+                   │                     │──────────────────────────────────┘
+                   │                     │   audio PCM  (PCC 0x03E3)
                    └─────────────────────┘──────────────────────────▶ AudioEngine
                                                                            │
                                                                            ▼
@@ -172,13 +175,25 @@ TCP connect to radio:4992
   - `0x03E3` — remote audio uncompressed (float32 stereo, big-endian)
   - `0x0123` — DAX audio reduced-BW (int16 mono, big-endian)
   - `0x8003` — panadapter FFT bins (uint16, big-endian)
-  - `0x8004` — waterfall
+  - `0x8004` — waterfall tiles (36-byte sub-header + Width×Height uint16 bins)
   - `0x8002` — meter data
+- **Waterfall tile bins** are **unsigned uint16** (big-endian), interpreted as signed
+  `int16` and divided by 128 to get an arbitrary intensity scale (not dBm directly).
+  Observed noise floor ~96–106, signal peaks ~110–115.  Colour-mapped client-side
+  with a focused range (default [104, 120]) for good contrast.
+- **Waterfall tile sub-header** (36 bytes at offset 28): `int64 FrameLowFreq`,
+  `int64 BinBandwidth`, `uint32 LineDurationMS`, `uint16 Width`, `uint16 Height`,
+  `uint32 Timecode`, `uint32 AutoBlackLevel`, `uint16 TotalBinsInFrame`,
+  `uint16 FirstBinIndex`.
 - **Audio payload byte order**: float32 samples are big-endian; byte-swap the raw
   `uint32` then `memcpy` to `float` before scaling to `int16` for QAudioSink.
 - **`stream create type=remote_audio_rx`** is the correct v1.4.0.0 command to start
   RX audio. `audio set` / `audio client` do not exist and return `0x50000016`.
-- **Panadapter stream ID**: `0x04000009` (not `0x40000000` — that is the pan *object* ID).
+- **VITA-49 stream IDs** (observed from FLEX-8600 v1.4.0.0):
+  - `0x40000000` — panadapter FFT (PCC `0x8003`), same value as the pan object ID
+  - `0x42000000` — waterfall tiles (PCC `0x8004`)
+  - `0x04xxxxxx` — remote audio RX (PCC `0x03E3`), dynamically assigned
+  - `0x00000700` — meter data (PCC `0x8002`)
 
 ### GUI↔radio frequency sync
 
@@ -190,6 +205,19 @@ model-driven dial updates back to the radio.
 ---
 
 ## Changelog
+
+### v0.1.4
+- Waterfall display: decode native VITA-49 waterfall tiles (PCC 0x8004) with
+  36-byte tile sub-header and uint16 bin payload
+- Waterfall colour map: multi-stop gradient (black → blue → cyan → green →
+  yellow → red) with focused intensity range for good signal-to-noise contrast
+- Waterfall tile values decoded as int16/128 intensity scale; colour range
+  tuned to observed noise floor (~104) and signal peaks (~120)
+- RadioModel: capture `display waterfall` status, configure waterfall via
+  `display panafall set` (auto_black, black_level, color_gain)
+- SpectrumWidget: separate waterfall colour range from FFT spectrum dBm range
+- PanadapterStream: route PCC 0x8004 to new `waterfallRowReady` signal;
+  suppress FFT-derived waterfall rows when native tiles are arriving
 
 ### v0.1.3
 - RX applet: complete header row (slice badge, tune-lock, RX/TX antenna dropdowns,
@@ -234,7 +262,6 @@ model-driven dial updates back to the radio.
 
 ## Next Steps
 
-- [ ] Waterfall display (scrolling `QImage` below the spectrum)
 - [ ] Slice filter passband shading on the spectrum
 - [ ] Multi-slice support (slice tabs or overlaid markers)
 - [ ] Audio TX (microphone → radio, full VITA-49 framing)
