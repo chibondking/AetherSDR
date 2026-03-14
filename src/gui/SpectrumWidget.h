@@ -33,9 +33,11 @@ public:
     void updateSpectrum(const QVector<float>& binsDbm);
 
     // Feed a single waterfall row from a VITA-49 waterfall tile.
+    // lowFreqMhz/highFreqMhz describe the tile's frequency span.
     // When waterfall tile data is available, this is used instead of
     // the FFT-derived waterfall rows from updateSpectrum().
-    void updateWaterfallRow(const QVector<float>& binsDbm);
+    void updateWaterfallRow(const QVector<float>& binsDbm,
+                            double lowFreqMhz, double highFreqMhz);
 
     // Update the dBm range used for the waterfall colour map and spectrum Y axis.
     void setDbmRange(float minDbm, float maxDbm);
@@ -66,7 +68,8 @@ private:
     void drawWaterfall(QPainter& p, const QRect& r);
     void drawFreqScale(QPainter& p, const QRect& r);
 
-    void pushWaterfallRow(const QVector<float>& bins, int destWidth);
+    void pushWaterfallRow(const QVector<float>& bins, int destWidth,
+                          double tileLowMhz = -1, double tileHighMhz = -1);
     QRgb dbmToRgb(float dbm) const;
 
     // Pixel x coordinate for a given frequency in MHz (0 = left edge).
@@ -81,16 +84,16 @@ private:
     int    m_filterLowHz{-1500};   // Hz below slice center
     int    m_filterHighHz{1500};   // Hz above slice center
 
-    float m_refLevel{0.0f};         // top of display (dBm)
-    float m_dynamicRange{120.0f};   // dB range shown in spectrum
+    float m_refLevel{-50.0f};       // top of display (dBm)
+    float m_dynamicRange{100.0f};   // dB range shown in spectrum (-50 to -150)
 
     // Tuning step size for click-snap and wheel scroll (Hz)
     int m_stepHz{100};
 
-    // Waterfall colour range — maps tile values (int16/128) to colour.
-    // Observed: noise floor ~96-106, signal peaks ~110-115.
-    float m_wfMinDbm{104.0f};
-    float m_wfMaxDbm{120.0f};
+    // Waterfall colour range (dBm). Using FFT-derived data, so these are
+    // real dBm values. Noise floor ~-130 dBm, strong signals ~-50 dBm.
+    float m_wfMinDbm{-130.0f};
+    float m_wfMaxDbm{-50.0f};
 
     // Scrolling waterfall image (Format_RGB32)
     QImage m_waterfall;

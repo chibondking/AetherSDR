@@ -1,5 +1,4 @@
 #include "MainWindow.h"
-#include "FrequencyDial.h"
 #include "ConnectionPanel.h"
 #include "SpectrumWidget.h"
 #include "AppletPanel.h"
@@ -20,16 +19,10 @@
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QSplitter>
-#include <QGroupBox>
-#include <QDockWidget>
 #include <QMenuBar>
 #include <QMenu>
 #include <QAction>
 #include <QLabel>
-#include <QComboBox>
-#include <QPushButton>
-#include <QSlider>
-#include <QProgressBar>
 #include <QCloseEvent>
 #include <QMessageBox>
 #include <QSettings>
@@ -60,6 +53,22 @@ MainWindow::MainWindow(QWidget* parent)
             this, [this](const RadioInfo& info){
         m_connPanel->setStatusText("Connecting…");
         m_radioModel.connectToRadio(info);
+        // Remember this radio for auto-connect on next launch
+        QSettings s("AetherSDR", "AetherSDR");
+        s.setValue("lastRadioSerial", info.serial);
+    });
+
+    // Auto-connect: when a radio is discovered, check if it matches the last one
+    connect(&m_discovery, &RadioDiscovery::radioDiscovered,
+            this, [this](const RadioInfo& info) {
+        QSettings s("AetherSDR", "AetherSDR");
+        const QString lastSerial = s.value("lastRadioSerial").toString();
+        if (!lastSerial.isEmpty() && info.serial == lastSerial
+            && !m_radioModel.isConnected()) {
+            qDebug() << "Auto-connecting to" << info.displayName();
+            m_connPanel->setStatusText("Auto-connecting…");
+            m_radioModel.connectToRadio(info);
+        }
     });
     connect(m_connPanel, &ConnectionPanel::disconnectRequested,
             this, [this]{ m_radioModel.disconnectFromRadio(); });
@@ -100,14 +109,10 @@ MainWindow::MainWindow(QWidget* parent)
         m_audio.setRxVolume(v / 100.0f);
     });
 
-    // ── Tuning step size → spectrum widget + freq dial ────────────────────
+    // ── Tuning step size → spectrum widget ─────────────────────────────────
     connect(m_appletPanel->rxApplet(), &RxApplet::stepSizeChanged,
             m_spectrum, &SpectrumWidget::setStepSize);
-    connect(m_appletPanel->rxApplet(), &RxApplet::stepSizeChanged,
-            m_freqDial, &FrequencyDial::setStepSize);
-    // Initialise both with the applet's default step (100 Hz, index 2).
     m_spectrum->setStepSize(100);
-    m_freqDial->setStepSize(100);
 
     // ── Antenna list from radio → applet panel ─────────────────────────────
     connect(&m_radioModel, &RadioModel::antListChanged,
@@ -154,10 +159,6 @@ MainWindow::MainWindow(QWidget* parent)
 
     // ── EQ applet: graphic equalizer ─────────────────────────────────────────
     m_appletPanel->eqApplet()->setEqualizerModel(m_radioModel.equalizerModel());
-
-    // ── Audio level meter ──────────────────────────────────────────────────
-    connect(&m_audio, &AudioEngine::levelChanged,
-            this, &MainWindow::onAudioLevel);
 
     // Start discovery
     m_discovery.startListening();
@@ -208,7 +209,7 @@ void MainWindow::buildMenuBar()
 
 void MainWindow::buildUI()
 {
-    // ── Central splitter: [sidebar | main area] ────────────────────────────
+    // ── Central splitter: [sidebar | spectrum | applets] ──────────────────
     auto* splitter = new QSplitter(Qt::Horizontal, this);
     setCentralWidget(splitter);
 
@@ -217,12 +218,9 @@ void MainWindow::buildUI()
     m_connPanel->setFixedWidth(260);
     splitter->addWidget(m_connPanel);
 
-    // Centre — spectrum + controls
-    auto* rightWidget = new QWidget(splitter);
-    auto* rightVBox   = new QVBoxLayout(rightWidget);
-    rightVBox->setContentsMargins(4, 4, 4, 4);
-    rightVBox->setSpacing(6);
-    splitter->addWidget(rightWidget);
+    // Centre — spectrum (full height, no controls strip)
+    m_spectrum = new SpectrumWidget(splitter);
+    splitter->addWidget(m_spectrum);
     splitter->setStretchFactor(1, 1);
 
     // Right — applet panel (includes S-Meter)
@@ -230,80 +228,11 @@ void MainWindow::buildUI()
     splitter->addWidget(m_appletPanel);
     splitter->setStretchFactor(2, 0);
 
-    // Spectrum/panadapter
-    m_spectrum = new SpectrumWidget(rightWidget);
-    rightVBox->addWidget(m_spectrum, 1);
-
-    // ── Controls strip ─────────────────────────────────────────────────────
-    auto* ctrlGroup = new QGroupBox("Slice 0", rightWidget);
-    auto* ctrlBox   = new QHBoxLayout(ctrlGroup);
-    ctrlBox->setSpacing(12);
-    rightVBox->addWidget(ctrlGroup);
-
-    // Frequency dial
-    m_freqDial = new FrequencyDial(ctrlGroup);
-    ctrlBox->addWidget(m_freqDial);
-
-    // Mode selector
-    ctrlBox->addWidget(new QLabel("Mode:", ctrlGroup));
-    m_modeCombo = new QComboBox(ctrlGroup);
-    // Modes from radio's mode_list (fw v1.4.0.0). CWL is not a separate mode —
-    // it's CW with cwl_enabled=1 in transmit status.
-    m_modeCombo->addItems({"USB", "LSB", "CW", "AM", "SAM", "FM", "NFM", "DFM", "DIGU", "DIGL", "RTTY"});
-    ctrlBox->addWidget(m_modeCombo);
-
-    // Volume
-    ctrlBox->addWidget(new QLabel("Vol:", ctrlGroup));
-    m_volumeSlider = new QSlider(Qt::Horizontal, ctrlGroup);
-    m_volumeSlider->setRange(0, 100);
-    m_volumeSlider->setValue(70);
-    m_volumeSlider->setFixedWidth(100);
-    ctrlBox->addWidget(m_volumeSlider);
-
-    // Audio level meter
-    m_audioLevel = new QProgressBar(ctrlGroup);
-    m_audioLevel->setRange(0, 100);
-    m_audioLevel->setValue(0);
-    m_audioLevel->setFixedWidth(80);
-    m_audioLevel->setTextVisible(false);
-    m_audioLevel->setStyleSheet(
-        "QProgressBar::chunk { background: qlineargradient(x1:0,y1:0,x2:1,y2:0,"
-        "stop:0 #00e5ff, stop:0.7 #00ff88, stop:1 #ff4444); }");
-    ctrlBox->addWidget(m_audioLevel);
-
-    // Mute button
-    m_muteButton = new QPushButton("🔇", ctrlGroup);
-    m_muteButton->setCheckable(true);
-    m_muteButton->setFixedWidth(40);
-    ctrlBox->addWidget(m_muteButton);
-
-    // TX button
-    m_txButton = new QPushButton("TX", ctrlGroup);
-    m_txButton->setCheckable(true);
-    m_txButton->setStyleSheet(
-        "QPushButton:checked { background-color: #cc2200; color: white; font-weight: bold; }");
-    m_txButton->setFixedWidth(60);
-    ctrlBox->addWidget(m_txButton);
-
-    ctrlBox->addStretch();
-
     // ── Status bar ─────────────────────────────────────────────────────────
     m_connStatusLabel = new QLabel("Disconnected", this);
     m_radioInfoLabel  = new QLabel("", this);
     statusBar()->addWidget(m_connStatusLabel);
     statusBar()->addPermanentWidget(m_radioInfoLabel);
-
-    // ── Connect GUI signals ─────────────────────────────────────────────────
-    connect(m_freqDial, &FrequencyDial::frequencyChanged,
-            this, &MainWindow::onFrequencyChanged);
-    connect(m_modeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
-            this, &MainWindow::onModeChanged);
-    connect(m_volumeSlider, &QSlider::valueChanged,
-            this, &MainWindow::onVolumeChanged);
-    connect(m_muteButton, &QPushButton::toggled,
-            this, &MainWindow::onMuteToggled);
-    connect(m_txButton, &QPushButton::toggled,
-            this, &MainWindow::onTxToggled);
 }
 
 // ─── Theme ────────────────────────────────────────────────────────────────────
@@ -407,39 +336,21 @@ void MainWindow::onSliceAdded(SliceModel* s)
     qDebug() << "MainWindow: slice added" << s->sliceId();
     // Update controls to reflect the first (active) slice
     if (m_radioModel.slices().size() == 1) {
-        updateSliceControls(s);
+        m_spectrum->setSliceFrequency(s->frequency());
+        m_spectrum->setSliceFilter(s->filterLow(), s->filterHigh());
         m_appletPanel->setSlice(s);
     }
 
-    // Forward slice frequency/mode changes → controls (guard prevents echo back to radio)
+    // Forward slice frequency/mode changes → spectrum
     connect(s, &SliceModel::frequencyChanged, this, [this](double mhz){
         m_updatingFromModel = true;
         m_spectrum->setSliceFrequency(mhz);
-        m_freqDial->setFrequency(mhz);
         m_updatingFromModel = false;
     });
     connect(s, &SliceModel::filterChanged, m_spectrum, &SpectrumWidget::setSliceFilter);
-    connect(s, &SliceModel::modeChanged, this, [this](const QString& mode) {
-        m_updatingFromModel = true;
-        const int idx = m_modeCombo->findText(mode);
-        if (idx >= 0) m_modeCombo->setCurrentIndex(idx);
-        m_updatingFromModel = false;
-    });
 }
 
 void MainWindow::onSliceRemoved(int /*id*/) {}
-
-void MainWindow::updateSliceControls(SliceModel* s)
-{
-    if (!s) return;
-    m_updatingFromModel = true;
-    m_freqDial->setFrequency(s->frequency());
-    m_spectrum->setSliceFrequency(s->frequency());
-    m_spectrum->setSliceFilter(s->filterLow(), s->filterHigh());
-    const int modeIdx = m_modeCombo->findText(s->mode());
-    if (modeIdx >= 0) m_modeCombo->setCurrentIndex(modeIdx);
-    m_updatingFromModel = false;
-}
 
 SliceModel* MainWindow::activeSlice() const
 {
@@ -451,10 +362,9 @@ SliceModel* MainWindow::activeSlice() const
 
 void MainWindow::onFrequencyChanged(double mhz)
 {
-    // If the slice is locked, snap all GUI elements back to the current freq.
+    // If the slice is locked, snap spectrum back to the current freq.
     if (auto* s = activeSlice(); s && s->isLocked()) {
         m_updatingFromModel = true;
-        m_freqDial->setFrequency(s->frequency());
         m_spectrum->setSliceFrequency(s->frequency());
         m_updatingFromModel = false;
         return;
@@ -465,35 +375,6 @@ void MainWindow::onFrequencyChanged(double mhz)
         if (auto* s = activeSlice())
             s->setFrequency(mhz);
     }
-}
-
-void MainWindow::onModeChanged(int /*index*/)
-{
-    if (m_updatingFromModel) return;
-    const QString mode = m_modeCombo->currentText();
-    if (auto* s = activeSlice())
-        s->setMode(mode);
-}
-
-void MainWindow::onVolumeChanged(int value)
-{
-    m_audio.setRxVolume(value / 100.0f);
-}
-
-void MainWindow::onMuteToggled(bool muted)
-{
-    m_audio.setMuted(muted);
-    m_muteButton->setText(muted ? "🔇" : "🔊");
-}
-
-void MainWindow::onTxToggled(bool tx)
-{
-    m_radioModel.setTransmit(tx);
-}
-
-void MainWindow::onAudioLevel(float rms)
-{
-    m_audioLevel->setValue(static_cast<int>(rms * 100));
 }
 
 } // namespace AetherSDR

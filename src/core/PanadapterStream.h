@@ -47,8 +47,10 @@ public:
 signals:
     void spectrumReady(const QVector<float>& binsDbm);
     // One row of waterfall data (dBm values, Width bins).
+    // lowFreqMhz / highFreqMhz describe the frequency span of this tile.
     // May be emitted multiple times per tile (once per Height row).
-    void waterfallRowReady(const QVector<float>& binsDbm);
+    void waterfallRowReady(const QVector<float>& binsDbm,
+                           double lowFreqMhz, double highFreqMhz);
     // Raw PCM payload (header stripped) from IF-Data (audio) VITA-49 packets.
     // Format: 16-bit signed, stereo, 24 kHz, little-endian.
     void audioDataReady(const QByteArray& pcm);

@@ -29,11 +29,8 @@ void SpectrumWidget::setFrequencyRange(double centerMhz, double bandwidthMhz)
 
 void SpectrumWidget::setDbmRange(float minDbm, float maxDbm)
 {
-    // Spectrum (FFT plot) uses the full radio range.
     m_refLevel     = maxDbm;
     m_dynamicRange = maxDbm - minDbm;
-    // Waterfall colour range stays at its own focused defaults
-    // (m_wfMinDbm / m_wfMaxDbm) for better contrast.
     update();
 }
 
@@ -60,19 +57,23 @@ void SpectrumWidget::updateSpectrum(const QVector<float>& binsDbm)
     }
     m_bins = binsDbm;
 
-    // Only use FFT for waterfall if no native waterfall tiles are arriving.
-    if (!m_hasNativeWaterfall && !m_waterfall.isNull())
+    // Use FFT data for waterfall — always matches the panadapter frequency range.
+    if (!m_waterfall.isNull())
         pushWaterfallRow(binsDbm, m_waterfall.width());
 
     update();
 }
 
-void SpectrumWidget::updateWaterfallRow(const QVector<float>& binsDbm)
+void SpectrumWidget::updateWaterfallRow(const QVector<float>& binsDbm,
+                                        double /*lowFreqMhz*/, double /*highFreqMhz*/)
 {
-    m_hasNativeWaterfall = true;
-    if (!m_waterfall.isNull())
-        pushWaterfallRow(binsDbm, m_waterfall.width());
-    update();
+    // Native waterfall tiles from the radio have unreliable frequency metadata
+    // (tile range often doesn't match the panadapter display range).
+    // Use FFT-derived waterfall rows instead for correct frequency alignment.
+    // We still mark native tiles as received to avoid double-drawing, but
+    // let the FFT path handle waterfall rendering.
+    Q_UNUSED(binsDbm);
+    m_hasNativeWaterfall = false;  // let FFT drive the waterfall
 }
 
 // ─── Layout helpers ────────────────────────────────────────────────────────────
@@ -95,8 +96,10 @@ static double snapToStep(double mhz, int stepHz)
 
 void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
 {
-    // Only tune if click is in the panadapter area, not the freq scale bar.
-    if (ev->position().y() >= height() - FREQ_SCALE_H) return;
+    // Skip clicks on the freq scale bar between spectrum and waterfall.
+    const int contentH = height() - FREQ_SCALE_H;
+    const int specH = static_cast<int>(contentH * SPECTRUM_FRAC);
+    if (ev->position().y() >= specH && ev->position().y() < specH + FREQ_SCALE_H) return;
 
     const double startMhz = m_centerMhz - m_bandwidthMhz / 2.0;
     const double rawMhz = startMhz + (ev->position().x() / width()) * m_bandwidthMhz;
@@ -105,8 +108,10 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
 
 void SpectrumWidget::wheelEvent(QWheelEvent* ev)
 {
-    // Only scroll-tune over the panadapter area, not the freq scale bar.
-    if (ev->position().y() >= height() - FREQ_SCALE_H) {
+    // Skip scroll on the freq scale bar.
+    const int contentH2 = height() - FREQ_SCALE_H;
+    const int specH2 = static_cast<int>(contentH2 * SPECTRUM_FRAC);
+    if (ev->position().y() >= specH2 && ev->position().y() < specH2 + FREQ_SCALE_H) {
         ev->ignore();
         return;
     }
@@ -167,7 +172,8 @@ QRgb SpectrumWidget::dbmToRgb(float dbm) const
 
 // ─── Waterfall update ─────────────────────────────────────────────────────────
 
-void SpectrumWidget::pushWaterfallRow(const QVector<float>& bins, int destWidth)
+void SpectrumWidget::pushWaterfallRow(const QVector<float>& bins, int destWidth,
+                                      double tileLowMhz, double tileHighMhz)
 {
     if (m_waterfall.isNull() || destWidth <= 0) return;
 
@@ -179,9 +185,13 @@ void SpectrumWidget::pushWaterfallRow(const QVector<float>& bins, int destWidth)
     std::memmove(bits + bpl, bits, static_cast<size_t>(bpl) * (h - 1));
 
     auto* row = reinterpret_cast<QRgb*>(bits);
+
+    Q_UNUSED(tileLowMhz);
+    Q_UNUSED(tileHighMhz);
+
     for (int x = 0; x < destWidth; ++x) {
         const int binIdx = x * bins.size() / destWidth;
-        const float dbm  = (binIdx < bins.size()) ? bins[binIdx] : m_wfMinDbm;
+        const float dbm = (binIdx >= 0 && binIdx < bins.size()) ? bins[binIdx] : m_wfMinDbm;
         row[x] = dbmToRgb(dbm);
     }
 }
@@ -197,17 +207,17 @@ void SpectrumWidget::paintEvent(QPaintEvent*)
     const int specH    = static_cast<int>(contentH * SPECTRUM_FRAC);
     const int wfH      = contentH - specH;
 
-    const QRect specRect (0, 0,     width(), specH);
-    const QRect wfRect   (0, specH, width(), wfH);
-    const QRect scaleRect(0, contentH, width(), FREQ_SCALE_H);
+    const QRect specRect (0, 0,                      width(), specH);
+    const QRect scaleRect(0, specH,                  width(), FREQ_SCALE_H);
+    const QRect wfRect   (0, specH + FREQ_SCALE_H,  width(), wfH);
 
     p.fillRect(specRect, QColor(0x0a, 0x0a, 0x14));
 
     drawGrid(p, specRect);
     drawSpectrum(p, specRect);
+    drawFreqScale(p, scaleRect);
     drawWaterfall(p, wfRect);
     drawSliceOverlay(p, specRect, wfRect);
-    drawFreqScale(p, scaleRect);
 }
 
 // ─── Grid ─────────────────────────────────────────────────────────────────────

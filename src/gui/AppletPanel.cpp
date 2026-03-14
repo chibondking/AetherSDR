@@ -184,6 +184,8 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
 
     m_phoneApplet = new PhoneApplet;
     addApplet("PHNE", m_phoneApplet);
+    static_cast<QPushButton*>(btnLayout->itemAt(btnLayout->count() - 1)->widget())->setChecked(true);
+    m_phoneApplet->show();
 
     // P/CW applet — visible by default
     m_phoneCwApplet = new PhoneCwApplet;
@@ -193,6 +195,8 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
 
     m_eqApplet = new EqApplet;
     addApplet("EQ", m_eqApplet);
+    static_cast<QPushButton*>(btnLayout->itemAt(btnLayout->count() - 1)->widget())->setChecked(true);
+    m_eqApplet->show();
 
     btnLayout->addStretch();
 }

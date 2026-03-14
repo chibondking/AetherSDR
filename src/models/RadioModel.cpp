@@ -510,22 +510,25 @@ void RadioModel::handlePanadapterStatus(const QMap<QString, QString>& kvs)
 void RadioModel::configurePan()
 {
     if (m_panId.isEmpty()) return;
+
+    // Set xpixels and ypixels — the radio requires explicit dimensions before
+    // it will produce valid FFT data.  Note: the command uses "xpixels" (no
+    // underscore) but status messages report "x_pixels" (with underscore).
     m_connection.sendCommand(
-        QString("display pan set %1 fps=25 average=0").arg(m_panId),
+        QString("display pan set %1 xpixels=1024 ypixels=700").arg(m_panId),
         [this](int code, const QString&) {
             if (code != 0)
-                qWarning() << "RadioModel: display pan set fps/average failed, code" << Qt::hex << code;
+                qWarning() << "RadioModel: display pan set xpixels/ypixels failed, code"
+                           << Qt::hex << code;
+            else
+                qDebug() << "RadioModel: panadapter xpixels=1024 ypixels=700 set OK";
+        });
 
-            // Request higher-resolution FFT bins.  Firmware v1.4.0.0 may reject
-            // x_pixels with 0x5000002D but the attempt is harmless.
-            if (!m_panId.isEmpty())
-                m_connection.sendCommand(
-                    QString("display pan set %1 x_pixels=1024").arg(m_panId),
-                    [](int code2, const QString&) {
-                        if (code2 != 0)
-                            qDebug() << "RadioModel: display pan set x_pixels=1024 rejected, code"
-                                     << Qt::hex << code2 << "(expected on v1.4.0.0)";
-                    });
+    m_connection.sendCommand(
+        QString("display pan set %1 fps=25 average=0 min_dbm=-130 max_dbm=-40").arg(m_panId),
+        [](int code, const QString&) {
+            if (code != 0)
+                qWarning() << "RadioModel: display pan set fps/average/dbm failed, code" << Qt::hex << code;
         });
 }
 

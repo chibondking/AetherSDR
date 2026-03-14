@@ -205,8 +205,13 @@ void PanadapterStream::decodeFFT(const uchar* raw, int totalBytes, bool hasTrail
     const float range = m_maxDbm - m_minDbm;
     const int   count = m_frame.buf.size();
     QVector<float> bins(count);
+
+    // The radio sends pre-scaled Y pixel coordinates:
+    //   raw 0 = max_dbm (strongest), raw (ypixels-1) = min_dbm (weakest).
+    // We configured ypixels=700, so the Y range is 0–699.
+    constexpr float kYPixels = 700.0f;
     for (int i = 0; i < count; ++i)
-        bins[i] = m_minDbm + (static_cast<float>(m_frame.buf[i]) / 65535.0f) * range;
+        bins[i] = m_maxDbm - (static_cast<float>(m_frame.buf[i]) / (kYPixels - 1.0f)) * range;
 
     emit spectrumReady(bins);
 }
@@ -235,11 +240,25 @@ void PanadapterStream::decodeWaterfallTile(const uchar* raw, int totalBytes, boo
 
     const uchar* sub = raw + VITA49_HEADER_BYTES;
 
-    // We only need Width and Height to unpack the tile data.
-    const quint16 tileWidth  = qFromBigEndian<quint16>(sub + 20);
-    const quint16 tileHeight = qFromBigEndian<quint16>(sub + 22);
+    // Extract frequency range from tile sub-header.
+    // FrameLowFreq and BinBandwidth are int64 "VitaFrequency" (Hz × 2^20).
+    const qint64 frameLowRaw  = qFromBigEndian<qint64>(sub + 0);
+    const qint64 binBwRaw     = qFromBigEndian<qint64>(sub + 8);
+    const quint16 tileWidth   = qFromBigEndian<quint16>(sub + 20);
+    const quint16 tileHeight  = qFromBigEndian<quint16>(sub + 22);
 
     if (tileWidth == 0 || tileHeight == 0) return;
+
+    // FrameLowFreq and BinBandwidth may be VitaFrequency (Hz × 2^20) or plain Hz.
+    // Try VitaFrequency first; if the result is unreasonable, try plain Hz.
+    double lowFreqMhz  = static_cast<double>(frameLowRaw) / (1048576.0 * 1e6);
+    double binBwMhz    = static_cast<double>(binBwRaw) / (1048576.0 * 1e6);
+    if (lowFreqMhz < 0.001 || lowFreqMhz > 1000.0) {
+        // Fallback: treat as plain Hz
+        lowFreqMhz = static_cast<double>(frameLowRaw) / 1e6;
+        binBwMhz   = static_cast<double>(binBwRaw) / 1e6;
+    }
+    const double highFreqMhz = lowFreqMhz + binBwMhz * tileWidth;
 
     const int payloadOffset = VITA49_HEADER_BYTES + TILE_SUBHEADER_BYTES;
     const int payloadBytes  = totalBytes - payloadOffset - (hasTrailer ? 4 : 0);
@@ -261,7 +280,7 @@ void PanadapterStream::decodeWaterfallTile(const uchar* raw, int totalBytes, boo
             const auto raw16 = static_cast<qint16>(qFromBigEndian<quint16>(rowData + i * 2));
             row[i] = static_cast<float>(raw16) / 128.0f;
         }
-        emit waterfallRowReady(row);
+        emit waterfallRowReady(row, lowFreqMhz, highFreqMhz);
     }
 }
 
