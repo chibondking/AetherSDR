@@ -528,6 +528,13 @@ void RadioModel::addSliceOnPan(const QString& panId)
 
 void RadioModel::createPanadapter()
 {
+    int limit = maxPanadapters();
+    if (static_cast<int>(m_panadapters.size()) >= limit) {
+        qCWarning(lcProtocol) << "RadioModel::createPanadapter: limit of" << limit
+                              << "panadapters reached for model" << m_model;
+        emit panadapterLimitReached(limit, m_model);
+        return;
+    }
     qCDebug(lcProtocol) << "RadioModel::createPanadapter: sending display panafall create";
     sendCmd("display panafall create x=100 y=100", [this](int code, const QString& body) {
         if (code != 0) {
