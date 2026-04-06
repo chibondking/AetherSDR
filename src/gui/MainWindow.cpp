@@ -581,6 +581,12 @@ MainWindow::MainWindow(QWidget* parent)
             QString("%1 supports a maximum of %2 panadapters")
                 .arg(model).arg(limit), 4000);
     });
+    connect(&m_radioModel, &RadioModel::sliceCreateFailed,
+            this, [this](int limit, const QString& model) {
+        statusBar()->showMessage(
+            QString("%1 supports a maximum of %2 slices across all connected clients")
+                .arg(model).arg(limit), 4000);
+    });
     connect(&m_radioModel.spotModel(), &SpotModel::spotsCleared,
             this, &MainWindow::rebuildMemorySpotFeed);
 

@@ -491,12 +491,14 @@ void RadioModel::addSlice()
     const QString cmd = QString("slice create pan=%1 freq=%2").arg(m_activePanId, freq);
 
     qCDebug(lcProtocol) << "RadioModel::addSlice:" << cmd;
-    sendCmd(cmd, [](int code, const QString& body) {
-        if (code != 0)
+    sendCmd(cmd, [this](int code, const QString& body) {
+        if (code != 0) {
             qCWarning(lcProtocol) << "RadioModel: slice create failed, code"
                        << Qt::hex << code << "body:" << body;
-        else
+            emit sliceCreateFailed(maxSlices(), m_model);
+        } else {
             qCDebug(lcProtocol) << "RadioModel: new slice created, index =" << body;
+        }
     });
 }
 
@@ -517,12 +519,14 @@ void RadioModel::addSliceOnPan(const QString& panId)
     const QString cmd = QString("slice create pan=%1 freq=%2").arg(panId, freq);
 
     qCDebug(lcProtocol) << "RadioModel::addSliceOnPan:" << cmd;
-    sendCmd(cmd, [](int code, const QString& body) {
-        if (code != 0)
+    sendCmd(cmd, [this](int code, const QString& body) {
+        if (code != 0) {
             qCWarning(lcProtocol) << "RadioModel: slice create failed, code"
                        << Qt::hex << code << "body:" << body;
-        else
+            emit sliceCreateFailed(maxSlices(), m_model);
+        } else {
             qCDebug(lcProtocol) << "RadioModel: new slice created, index =" << body;
+        }
     });
 }
 
