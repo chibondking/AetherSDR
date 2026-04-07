@@ -2117,10 +2117,15 @@ MainWindow::MainWindow(QWidget* parent)
         restoreState(QByteArray::fromBase64(stateB64.toLatin1()));
     // Clear stale splitter state — layout has changed across versions.
     s.remove("SplitterState");
-    // Force 4-pane sizing: CWX=0, DVK=0 (hidden), center=stretch, applet=260px
-    QTimer::singleShot(0, this, [this]() {
-        m_splitter->setSizes({0, 0, width() - 260, 260});
-    });
+    // Only force default splitter sizes on first launch (no saved geometry).
+    // If geometry was restored, let the window system apply it without
+    // interference — forcing setSizes() in the same event-loop tick as
+    // restoreGeometry() overrides the restored position on multi-monitor setups.
+    if (geomB64.isEmpty()) {
+        QTimer::singleShot(0, this, [this]() {
+            m_splitter->setSizes({0, 0, width() - 260, 260});
+        });
+    }
 
     // Auto-popup connection dialog if no saved radio
     QString lastSerial = s.value("LastConnectedRadioSerial", "").toString();

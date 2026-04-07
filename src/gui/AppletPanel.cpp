@@ -810,7 +810,9 @@ void AppletPanel::floatApplet(const QString& id)
     // positions. On WSL2 (WSLg/Wayland), set QT_QPA_PLATFORM=xcb to get
     // X11 behaviour via XWayland.
     win->show();
-    QTimer::singleShot(50, win, [win]() { win->restoreGeometry(); });
+    // 200 ms gives Windows DWM time to fully map and composite the HWND
+    // before we attempt to position it.  50 ms was insufficient on Windows 11.
+    QTimer::singleShot(200, win, [win]() { win->restoreGeometry(); });
 
     // Hide wrapper in panel (keeps toggle button state as-is)
     entry.widget->hide();

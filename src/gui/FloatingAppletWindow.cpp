@@ -85,7 +85,10 @@ FloatingAppletWindow::FloatingAppletWindow(const QString& appletId,
     m_saveTimer = new QTimer(this);
     m_saveTimer->setSingleShot(true);
     m_saveTimer->setInterval(400);
-    connect(m_saveTimer, &QTimer::timeout, this, &FloatingAppletWindow::saveGeometry);
+    connect(m_saveTimer, &QTimer::timeout, this, [this]() {
+        saveGeometry();
+        AppSettings::instance().save();  // flush after debounce settles
+    });
 }
 
 void FloatingAppletWindow::saveGeometry()
@@ -108,7 +111,9 @@ void FloatingAppletWindow::saveGeometry()
     s.setValue(prefix + "_Y",      QString::number(geo.y() - screenGeo.y()));
     s.setValue(prefix + "_W",      QString::number(geo.width()));
     s.setValue(prefix + "_H",      QString::number(geo.height()));
-    s.save();
+    // Do NOT call s.save() here — callers (dockApplet, closeEvent, MainWindow
+    // closeEvent) are responsible for flushing.  This prevents a mid-drag
+    // debounce timer from writing the full XML file on every move step.
 }
 
 void FloatingAppletWindow::restoreGeometry()
@@ -129,13 +134,17 @@ void FloatingAppletWindow::restoreGeometry()
     if (!screen) { screen = QGuiApplication::primaryScreen(); }
     if (!screen) { return; }
 
+    m_restoringGeometry = true;
     resize(w, h);
 
     // Wayland compositors own window placement — attempting move() is a no-op
     // on most compositors. Skip it so we don't fight the compositor.
     // On X11 (including XWayland / WSL2 with QT_QPA_PLATFORM=xcb) and on
     // Windows / macOS, move() works correctly.
-    if (QGuiApplication::platformName() == QLatin1String("wayland")) { return; }
+    if (QGuiApplication::platformName() == QLatin1String("wayland")) {
+        m_restoringGeometry = false;
+        return;
+    }
 
     const int     savedX = s.value(prefix + "_X", "0").toInt();
     const int     savedY = s.value(prefix + "_Y", "0").toInt();
@@ -151,18 +160,19 @@ void FloatingAppletWindow::restoreGeometry()
                          sGeo.y() + savedY,
                          avail.bottom() - qMin(h, avail.height()));
     move(x, y);
+    m_restoringGeometry = false;
 }
 
 void FloatingAppletWindow::resizeEvent(QResizeEvent* ev)
 {
     QWidget::resizeEvent(ev);
-    m_saveTimer->start();  // restart debounce on every resize step
+    if (!m_restoringGeometry) { m_saveTimer->start(); }
 }
 
 void FloatingAppletWindow::moveEvent(QMoveEvent* ev)
 {
     QWidget::moveEvent(ev);
-    m_saveTimer->start();  // restart debounce on every move step
+    if (!m_restoringGeometry) { m_saveTimer->start(); }
 }
 
 void FloatingAppletWindow::closeEvent(QCloseEvent* ev)
@@ -171,12 +181,13 @@ void FloatingAppletWindow::closeEvent(QCloseEvent* ev)
     // so the window is properly removed from Qt's visible-window count.
     if (auto* p = qobject_cast<QWidget*>(parent()); !p || !p->isVisible()) {
         m_saveTimer->stop();
-        saveGeometry();  // capture final size/position before exit
+        saveGeometry();
+        AppSettings::instance().save();  // flush before exit
         ev->accept();
         return;
     }
     // User closed the floating window manually — re-dock instead of discarding.
-    saveGeometry();
+    // AppletPanel::dockApplet() will call saveGeometry() + save() itself.
     emit dockRequested(m_appletId);
     ev->ignore();  // AppletPanel::dockApplet() will hide/destroy this window
 }

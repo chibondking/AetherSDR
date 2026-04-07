@@ -40,7 +40,8 @@ protected:
 private:
     QString      m_appletId;
     QVBoxLayout* m_contentLayout{nullptr};
-    QTimer*      m_saveTimer{nullptr};  // debounce geometry saves on resize/move
+    QTimer*      m_saveTimer{nullptr};        // debounce geometry saves on resize/move
+    bool         m_restoringGeometry{false};  // suppresses save during restoreGeometry()
 };
 
 } // namespace AetherSDR
