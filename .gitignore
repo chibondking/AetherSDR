@@ -9,5 +9,3 @@ build.ps1
 CMakeFiles/
 docs/logo-original.jpg
 docs/logo_upscayl.png
-/.vs
-/out/install/x64-Debug
