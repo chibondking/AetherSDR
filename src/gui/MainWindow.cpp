@@ -969,8 +969,10 @@ MainWindow::MainWindow(QWidget* parent)
             });
         }
     });
-    connect(&m_radioModel, &RadioModel::panadapterLevelChanged,
-            spectrum(), &SpectrumWidget::setDbmRange);
+    // NOTE: panadapterLevelChanged → spectrum()::setDbmRange has been removed.
+    // Level updates are routed per-pan via PanadapterModel::levelChanged in
+    // wirePanadapter() so that PanadapterModel's change-guard prevents stale
+    // echo-backs from overwriting in-flight user changes.
     // ── Multi-panadapter lifecycle ──────────────────────────────────────────
     connect(&m_radioModel, &RadioModel::panadapterAdded,
             this, [this](PanadapterModel* pan) {
@@ -5200,6 +5202,17 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         connect(pan, &PanadapterModel::wideChanged,
                 sw, &SpectrumWidget::setWideActive);
         sw->setWideActive(pan->wideActive());
+
+        // Route confirmed level changes (min_dbm / max_dbm) from the radio to
+        // this pan's spectrum widget.  Using the per-pan PanadapterModel signal
+        // (guarded by change detection) rather than the RadioModel-level
+        // panadapterLevelChanged signal ensures that:
+        //   a) stale echo-backs (same value) don't overwrite the user's in-flight
+        //      local change while waiting for the radio to confirm the command, and
+        //   b) in multi-pan setups, a level update on pan B doesn't incorrectly
+        //      update pan A's dBm scale.
+        connect(pan, &PanadapterModel::levelChanged,
+                sw, &SpectrumWidget::setDbmRange);
     }
 
     // ── Tuning step size → this pan's spectrum widget ─────────────────────
