@@ -588,11 +588,23 @@ void SpectrumWidget::setFrequencyRange(double centerMhz, double bandwidthMhz)
     // Small nudge: animate m_centerMhz smoothly so the VFO widget glides rather
     // than snapping. The radio command has already been sent with the final center
     // by panFollowVfo; the echo-back will be a no-op once the animation lands.
+
+    // Guard: if already animating toward this exact target (e.g. radio echo-back
+    // arriving mid-animation), don't restart — just let the current animation finish.
+    if (m_panCenterAnim &&
+        m_panCenterAnim->state() != QAbstractAnimation::Stopped &&
+        m_panCenterTarget == centerMhz) {
+        return;
+    }
+
     m_panCenterTarget = centerMhz;
 
     if (!m_panCenterAnim) {
         m_panCenterAnim = new QVariantAnimation(this);
-        m_panCenterAnim->setEasingCurve(QEasingCurve::OutCubic);
+        // InOutQuad: slow start → fast middle → slow end.
+        // First frame moves ~1% of total distance so the widget eases in rather
+        // than snapping, while still completing in a perceptually short time.
+        m_panCenterAnim->setEasingCurve(QEasingCurve::InOutQuad);
         connect(m_panCenterAnim, &QVariantAnimation::valueChanged, this,
             [this](const QVariant& v) {
                 m_centerMhz = v.toDouble();
@@ -605,14 +617,14 @@ void SpectrumWidget::setFrequencyRange(double centerMhz, double bandwidthMhz)
             });
     }
 
-    // Stop any running animation (its valueChanged already set m_centerMhz partway),
-    // then start a fresh one from the current visual position to the new target.
+    // Stop any in-progress animation toward a *different* target and restart
+    // from the current visual position toward the new one.
     if (m_panCenterAnim->state() != QAbstractAnimation::Stopped) {
         m_panCenterAnim->stop();
     }
     m_panCenterAnim->setStartValue(m_centerMhz);
     m_panCenterAnim->setEndValue(centerMhz);
-    m_panCenterAnim->setDuration(120);
+    m_panCenterAnim->setDuration(200);
     m_panCenterAnim->start();
 }
 
