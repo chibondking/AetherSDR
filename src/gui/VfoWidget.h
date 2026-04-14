@@ -96,6 +96,7 @@ Q_SIGNALS:
     void swapRequested();
     void autotuneRequested(bool intermittent);  // CW auto-tune: false=stop, true=loop
     void autotuneOnceRequested();               // CW auto-tune one-shot
+    void zeroBeatRequested();                   // client-side CW zero-beat
     void addSpotRequested(double freqMhz);
     void sliceActivationRequested(int sliceId);
     // Emitted when the wheel tunes by step (autopan=0 path) — MainWindow uses
@@ -182,6 +183,7 @@ private:
     bool         m_savedSquelchOn{false};
 public:
     void setDiversityAllowed(bool allowed);
+    void setSmartSdrPlus(bool has) { m_hasSmartSdrPlus = has; }
 private:
     QSlider* m_sqlSlider{nullptr};
     QComboBox* m_agcCmb{nullptr};
@@ -238,6 +240,8 @@ private:
     // CW autotune buttons (only visible in CW mode)
     QPushButton* m_autotuneOnceBtn{nullptr};
     QPushButton* m_autotuneLoopBtn{nullptr};
+    QPushButton* m_zeroBeatBtn{nullptr};
+    bool         m_hasSmartSdrPlus{false};
     // RIT/XIT tab
     QPushButton* m_ritBtn{nullptr};
     QPushButton* m_xitBtn{nullptr};
