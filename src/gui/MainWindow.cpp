@@ -5862,20 +5862,25 @@ void MainWindow::panFollowVfo(SliceModel* s, double mhz)
     if (!pan) return;
     const double halfBw = pan->bandwidthMhz() / 2.0;
     if (halfBw <= 0.0) return;  // guard: bandwidth not yet received from radio
-    const double low    = pan->centerMhz() - halfBw;
-    const double high   = pan->centerMhz() + halfBw;
-    if (mhz >= low && mhz <= high) return;
 
-    // Nudge the pan just enough to keep the VFO ~10% inside the nearer edge,
-    // rather than snapping to dead center. This matches the "cursor hits viewport
-    // boundary" UX seen in text editors — less disorienting during step-tuning. (#989)
-    static constexpr double kMarginFrac = 0.10;
+    // Trigger when VFO enters the outer 20% of the visible window — matches the
+    // radio's built-in autopan threshold so all tuning paths (keyboard, wheel,
+    // FlexControl, MIDI) feel identical. (#989)
+    static constexpr double kTriggerFrac = 0.20;
+    const double triggerHalfBw = halfBw * (1.0 - kTriggerFrac);
+    if (mhz >= pan->centerMhz() - triggerHalfBw &&
+        mhz <= pan->centerMhz() + triggerHalfBw) return;
+
+    // Place VFO 30% from the nearer edge after the nudge.
+    // kMarginFrac must be > kTriggerFrac so the post-nudge position is inside
+    // the safe zone and doesn't immediately re-trigger. (#989)
+    static constexpr double kMarginFrac = 0.30;
     const double margin = halfBw * kMarginFrac;
     double newCenter;
-    if (mhz < low) {
-        newCenter = mhz + halfBw - margin;   // VFO lands 10% from left edge
+    if (mhz < pan->centerMhz()) {
+        newCenter = mhz + halfBw - margin;   // VFO lands 30% from left edge
     } else {
-        newCenter = mhz - halfBw + margin;   // VFO lands 10% from right edge
+        newCenter = mhz - halfBw + margin;   // VFO lands 30% from right edge
     }
 
     // Optimistic local update: apply new center immediately so SpectrumWidget
@@ -6334,7 +6339,10 @@ void MainWindow::registerShortcutActions()
         if (!s || s->isLocked()) return;
         int stepHz = spectrum() ? spectrum()->stepSize() : 100;
         double newMhz = s->frequency() + steps * stepHz / 1e6;
-        s->tuneAndRecenter(newMhz);
+        // Use setFrequency (autopan=0) + panFollowVfo so all step-tuning paths
+        // (keyboard, wheel, FlexControl, MIDI) share the same pan-follow logic. (#989)
+        s->setFrequency(newMhz);
+        panFollowVfo(s, newMhz);
     };
 
     // Step cycle helper
