@@ -2,6 +2,7 @@
 #include "SpectrumOverlayMenu.h"
 #include "VfoWidget.h"
 #include "SliceColors.h"
+#include <QVariantAnimation>
 
 #ifdef AETHER_GPU_SPECTRUM
 #include <rhi/qrhi.h>
@@ -556,17 +557,63 @@ void SpectrumWidget::setFrequencyRange(double centerMhz, double bandwidthMhz)
     const double oldCenterMhz = m_centerMhz;
     const double oldBandwidthMhz = m_bandwidthMhz;
 
-    if (oldBandwidthMhz > 0.0 && bandwidthMhz > 0.0) {
-        reprojectWaterfall(oldCenterMhz, oldBandwidthMhz, centerMhz, bandwidthMhz);
+    // Distinguish pan-follow nudges (#989) from large jumps (band change, click-to-tune).
+    // Nudges shift center by ~10% of halfBw; 25% threshold comfortably separates the two.
+    const double halfBw = bandwidthMhz / 2.0;
+    const bool bwChanged = (bandwidthMhz != m_bandwidthMhz);
+    const bool largeShift = bwChanged ||
+        (halfBw > 0.0 && std::abs(centerMhz - m_centerMhz) > halfBw * 0.25);
+
+    if (bwChanged) {
+        m_bandwidthMhz = bandwidthMhz;
     }
 
-    qDebug() << "SpectrumWidget::setFrequencyRange center="
-             << QString::number(centerMhz, 'f', 6)
-             << "bw=" << QString::number(bandwidthMhz, 'f', 6)
-             << "bins=" << m_smoothed.size();
-    m_centerMhz    = centerMhz;
-    m_bandwidthMhz = bandwidthMhz;
-    markOverlayDirty();
+    if (largeShift) {
+        // Large jump: cancel any running animation and snap immediately.
+        if (m_panCenterAnim && m_panCenterAnim->state() != QAbstractAnimation::Stopped) {
+            m_panCenterAnim->stop();
+        }
+        if (oldBandwidthMhz > 0.0 && bandwidthMhz > 0.0) {
+            reprojectWaterfall(oldCenterMhz, oldBandwidthMhz, centerMhz, bandwidthMhz);
+        }
+        m_bins.clear();
+        m_smoothed.clear();
+        m_wfWriteRow = 0;
+        m_centerMhz       = centerMhz;
+        m_panCenterTarget = centerMhz;
+        markOverlayDirty();
+        return;
+    }
+
+    // Small nudge: animate m_centerMhz smoothly so the VFO widget glides rather
+    // than snapping. The radio command has already been sent with the final center
+    // by panFollowVfo; the echo-back will be a no-op once the animation lands.
+    m_panCenterTarget = centerMhz;
+
+    if (!m_panCenterAnim) {
+        m_panCenterAnim = new QVariantAnimation(this);
+        m_panCenterAnim->setEasingCurve(QEasingCurve::OutCubic);
+        connect(m_panCenterAnim, &QVariantAnimation::valueChanged, this,
+            [this](const QVariant& v) {
+                m_centerMhz = v.toDouble();
+                markOverlayDirty();
+            });
+        connect(m_panCenterAnim, &QVariantAnimation::finished, this,
+            [this]() {
+                m_centerMhz = m_panCenterTarget;  // land exactly on target
+                markOverlayDirty();
+            });
+    }
+
+    // Stop any running animation (its valueChanged already set m_centerMhz partway),
+    // then start a fresh one from the current visual position to the new target.
+    if (m_panCenterAnim->state() != QAbstractAnimation::Stopped) {
+        m_panCenterAnim->stop();
+    }
+    m_panCenterAnim->setStartValue(m_centerMhz);
+    m_panCenterAnim->setEndValue(centerMhz);
+    m_panCenterAnim->setDuration(120);
+    m_panCenterAnim->start();
 }
 
 void SpectrumWidget::setSpectrumFrac(float f)

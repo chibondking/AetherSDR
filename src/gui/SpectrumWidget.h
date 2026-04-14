@@ -9,6 +9,8 @@
 #include <QDateTime>
 #include <QTimer>
 
+class QVariantAnimation;
+
 #ifdef AETHER_GPU_SPECTRUM
 #include <QRhiWidget>
 #include <rhi/qrhi.h>
@@ -395,6 +397,10 @@ private:
 
     double m_centerMhz{14.225};
     double m_bandwidthMhz{0.200};
+    // Pan-follow smooth animation (#989): animates m_centerMhz toward the target
+    // for small nudges so the VFO widget glides instead of snapping.
+    QVariantAnimation* m_panCenterAnim{nullptr};
+    double             m_panCenterTarget{14.225};
 
     // Multi-slice overlays (replaces single m_vfoFreqMhz / m_filterLowHz / etc.)
     QVector<SliceOverlay> m_sliceOverlays;
