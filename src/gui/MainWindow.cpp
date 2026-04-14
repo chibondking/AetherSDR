@@ -5855,17 +5855,35 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
 
 void MainWindow::panFollowVfo(SliceModel* s, double mhz)
 {
+    // Note: centerActiveSliceInPanadapter() is intentionally not reused here.
+    // That helper snaps to dead center and does extra work (pan stack activation,
+    // VFO widget update) that is redundant or wrong for incremental step-tuning.
     PanadapterModel* pan = m_radioModel.panadapter(s->panId());
     if (!pan) return;
     const double halfBw = pan->bandwidthMhz() / 2.0;
-    if (mhz < pan->centerMhz() - halfBw || mhz > pan->centerMhz() + halfBw) {
-        // Optimistic local update: apply new center immediately so SpectrumWidget
-        // repaints without waiting for the radio echo-back round-trip. (#989)
-        pan->applyPanStatus({{"center", QString::number(mhz, 'f', 6)}});
-        m_radioModel.sendCommand(
-            QString("display pan set %1 center=%2")
-                .arg(pan->panId()).arg(mhz, 0, 'f', 6));
+    if (halfBw <= 0.0) return;  // guard: bandwidth not yet received from radio
+    const double low    = pan->centerMhz() - halfBw;
+    const double high   = pan->centerMhz() + halfBw;
+    if (mhz >= low && mhz <= high) return;
+
+    // Nudge the pan just enough to keep the VFO ~10% inside the nearer edge,
+    // rather than snapping to dead center. This matches the "cursor hits viewport
+    // boundary" UX seen in text editors — less disorienting during step-tuning. (#989)
+    static constexpr double kMarginFrac = 0.10;
+    const double margin = halfBw * kMarginFrac;
+    double newCenter;
+    if (mhz < low) {
+        newCenter = mhz + halfBw - margin;   // VFO lands 10% from left edge
+    } else {
+        newCenter = mhz - halfBw + margin;   // VFO lands 10% from right edge
     }
+
+    // Optimistic local update: apply new center immediately so SpectrumWidget
+    // repaints without waiting for the radio echo-back round-trip. (#989)
+    pan->applyPanStatus({{"center", QString::number(newCenter, 'f', 6)}});
+    m_radioModel.sendCommand(
+        QString("display pan set %1 center=%2")
+            .arg(pan->panId()).arg(newCenter, 0, 'f', 6));
 }
 
 void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
