@@ -1012,8 +1012,8 @@ MainWindow::MainWindow(QWidget* parent)
         wirePanadapter(applet);
         connect(pan, &PanadapterModel::infoChanged,
                 applet->spectrumWidget(), &SpectrumWidget::setFrequencyRange);
-        connect(pan, &PanadapterModel::levelChanged,
-                applet->spectrumWidget(), &SpectrumWidget::setDbmRange);
+        // NOTE: levelChanged → setDbmRange is wired in wirePanadapter() above;
+        // don't connect it here again or setDbmRange fires twice per level change.
         connect(pan, &PanadapterModel::rfGainInfoChanged,
                 applet->spectrumWidget()->overlayMenu(),
                 &SpectrumOverlayMenu::setRfGainRange);

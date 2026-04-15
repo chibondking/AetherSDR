@@ -565,7 +565,7 @@ void SpectrumWidget::setFrequencyRange(double centerMhz, double bandwidthMhz)
     // that blanks the spectrum, so skip it.
     if (m_panCenterAnim &&
         m_panCenterAnim->state() != QAbstractAnimation::Stopped &&
-        centerMhz == m_panCenterStart) {
+        std::abs(centerMhz - m_panCenterStart) < 1e-9) {
         return;
     }
 
@@ -612,7 +612,7 @@ void SpectrumWidget::setFrequencyRange(double centerMhz, double bandwidthMhz)
     // arriving mid-animation), don't restart — just let the current animation finish.
     if (m_panCenterAnim &&
         m_panCenterAnim->state() != QAbstractAnimation::Stopped &&
-        m_panCenterTarget == centerMhz) {
+        std::abs(m_panCenterTarget - centerMhz) < 1e-9) {
         return;
     }
 
@@ -836,6 +836,11 @@ void SpectrumWidget::updateSpectrum(const QVector<float>& binsDbm)
                 // Only adjust if change is significant (> 1 dB)
                 float currentMin = m_refLevel - m_dynamicRange;
                 if (std::abs(newMin - currentMin) > 1.0f) {
+                    // Optimistic update: suppress re-firing on subsequent FFT frames
+                    // while waiting for the radio to confirm and echo the new range.
+                    // Without this, every FFT frame would re-emit until the echo-back
+                    // arrives, producing a burst of identical display pan set commands.
+                    m_dynamicRange = newRange;
                     emit dbmRangeChangeRequested(newMin, m_refLevel);
                 }
             }
