@@ -737,6 +737,11 @@ void SpectrumWidget::updateSpectrum(const QVector<float>& binsDbm)
                 // Only adjust if change is significant (> 1 dB)
                 float currentMin = m_refLevel - m_dynamicRange;
                 if (std::abs(newMin - currentMin) > 1.0f) {
+                    // Optimistic update: suppress re-firing on subsequent FFT frames
+                    // while waiting for the radio to confirm and echo the new range.
+                    // Without this, every FFT frame would re-emit until the echo-back
+                    // arrives, producing a burst of identical display pan set commands.
+                    m_dynamicRange = newRange;
                     emit dbmRangeChangeRequested(newMin, m_refLevel);
                 }
             }
