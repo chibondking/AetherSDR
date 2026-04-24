@@ -1,6 +1,7 @@
 #include "DaxIqApplet.h"
 #include "ComboStyle.h"
 #include "GuardedSlider.h"
+#include "core/AppSettings.h"
 #include "models/RadioModel.h"
 #include "models/DaxIqModel.h"
 
@@ -69,10 +70,23 @@ void DaxIqApplet::buildUI()
         m_iqRateCombo[i]->addItem("48k",  48000);
         m_iqRateCombo[i]->addItem("96k",  96000);
         m_iqRateCombo[i]->addItem("192k", 192000);
-        m_iqRateCombo[i]->setCurrentIndex(1);  // default 48k
+        {
+            int savedRate = AppSettings::instance()
+                .value(QStringLiteral("DaxIqRate%1").arg(i + 1), "48000").toInt();
+            QSignalBlocker sb(m_iqRateCombo[i]);
+            for (int j = 0; j < m_iqRateCombo[i]->count(); ++j) {
+                if (m_iqRateCombo[i]->itemData(j).toInt() == savedRate) {
+                    m_iqRateCombo[i]->setCurrentIndex(j);
+                    break;
+                }
+            }
+        }
         m_iqRateCombo[i]->setFixedWidth(60);
         connect(m_iqRateCombo[i], &QComboBox::currentIndexChanged, this, [this, i]() {
             int rate = m_iqRateCombo[i]->currentData().toInt();
+            auto& ss = AppSettings::instance();
+            ss.setValue(QStringLiteral("DaxIqRate%1").arg(i + 1), QString::number(rate));
+            ss.save();
             emit iqRateChanged(i + 1, rate);
         });
         row->addWidget(m_iqRateCombo[i]);
@@ -92,16 +106,20 @@ void DaxIqApplet::buildUI()
         m_iqEnable[i]->setStyleSheet(kIqBtnOff);
         connect(m_iqEnable[i], &QPushButton::clicked, this, [this, i]() {
             bool wasOn = m_iqEnable[i]->text() == "On";
+            auto& ss = AppSettings::instance();
             if (wasOn) {
                 emit iqDisableRequested(i + 1);
                 m_iqEnable[i]->setText("Off");
                 m_iqEnable[i]->setStyleSheet(kIqBtnOff);
                 m_iqMeter[i]->setValue(0);
+                ss.setValue(QStringLiteral("DaxIqEnabled%1").arg(i + 1), "False");
             } else {
                 emit iqEnableRequested(i + 1);
                 m_iqEnable[i]->setText("On");
                 m_iqEnable[i]->setStyleSheet(kIqBtnOn);
+                ss.setValue(QStringLiteral("DaxIqEnabled%1").arg(i + 1), "True");
             }
+            ss.save();
         });
         row->addWidget(m_iqEnable[i]);
 
@@ -116,20 +134,27 @@ void DaxIqApplet::setRadioModel(RadioModel* model)
         return;
     }
 
-    // Reset IQ buttons on connection state change — streams are per-session,
-    // not persisted by the radio.
+    // DAX IQ streams are per-session. On reconnect: reset UI then re-enable
+    // any channels the user had on before disconnect.
     connect(model, &RadioModel::connectionStateChanged,
             this, [this](bool connected) {
         if (!connected) {
             return;
         }
+        auto& ss = AppSettings::instance();
         for (int i = 0; i < kChannels; ++i) {
-            if (m_iqEnable[i]) {
-                m_iqEnable[i]->setText("Off");
-                m_iqEnable[i]->setStyleSheet(kIqBtnOff);
-                if (m_iqMeter[i]) {
-                    m_iqMeter[i]->setValue(0);
-                }
+            if (!m_iqEnable[i]) {
+                continue;
+            }
+            m_iqEnable[i]->setText("Off");
+            m_iqEnable[i]->setStyleSheet(kIqBtnOff);
+            if (m_iqMeter[i]) {
+                m_iqMeter[i]->setValue(0);
+            }
+            if (ss.value(QStringLiteral("DaxIqEnabled%1").arg(i + 1), "False").toString() == "True") {
+                emit iqEnableRequested(i + 1);
+                m_iqEnable[i]->setText("On");
+                m_iqEnable[i]->setStyleSheet(kIqBtnOn);
             }
         }
     });
