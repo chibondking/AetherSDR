@@ -52,6 +52,10 @@ public:
     void floatPanadapter(const QString& panId);
     void dockPanadapter(const QString& panId);
     bool isFloating(const QString& panId) const;
+
+    // Follow the main-window frameless setting for all active floating windows.
+    void setFramelessMode(bool on);
+
     void prepareShutdown();
 
 signals:
