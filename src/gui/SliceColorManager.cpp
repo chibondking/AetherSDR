@@ -19,6 +19,12 @@ SliceColorManager::SliceColorManager()
     rebuildHexCache();
 }
 
+int SliceColorManager::safeIdx(int sliceId)
+{
+    Q_ASSERT(sliceId >= 0);
+    return std::abs(sliceId) % kSliceColorCount;
+}
+
 QColor SliceColorManager::defaultActive(int idx)
 {
     const auto& c = kSliceColors[idx % kSliceColorCount];
@@ -33,7 +39,7 @@ QColor SliceColorManager::defaultDim(int idx)
 
 QColor SliceColorManager::activeColor(int sliceId) const
 {
-    int idx = sliceId % kSliceColorCount;
+    int idx = safeIdx(sliceId);
     if (m_useCustom)
         return m_customColors[idx];
     return defaultActive(idx);
@@ -41,7 +47,7 @@ QColor SliceColorManager::activeColor(int sliceId) const
 
 QColor SliceColorManager::dimColor(int sliceId) const
 {
-    int idx = sliceId % kSliceColorCount;
+    int idx = safeIdx(sliceId);
     if (m_useCustom) {
         // Derive dim color at ~40% of the custom active color's value.
         QColor c = m_customColors[idx];
@@ -52,12 +58,12 @@ QColor SliceColorManager::dimColor(int sliceId) const
 
 QString SliceColorManager::hexActive(int sliceId) const
 {
-    return m_hexCache[sliceId % kSliceColorCount];
+    return m_hexCache[safeIdx(sliceId)];
 }
 
 QColor SliceColorManager::customColor(int sliceId) const
 {
-    return m_customColors[sliceId % kSliceColorCount];
+    return m_customColors[safeIdx(sliceId)];
 }
 
 void SliceColorManager::setUseCustomColors(bool enabled)
@@ -72,7 +78,7 @@ void SliceColorManager::setUseCustomColors(bool enabled)
 
 void SliceColorManager::setCustomColor(int sliceId, QColor color)
 {
-    int idx = sliceId % kSliceColorCount;
+    int idx = safeIdx(sliceId);
     if (m_customColors[idx] == color)
         return;
     m_customColors[idx] = color;
@@ -85,7 +91,7 @@ void SliceColorManager::setCustomColor(int sliceId, QColor color)
 
 void SliceColorManager::resetToDefault(int sliceId)
 {
-    int idx = sliceId % kSliceColorCount;
+    int idx = safeIdx(sliceId);
     m_customColors[idx] = defaultActive(idx);
     rebuildHexCache();
     if (m_useCustom) {

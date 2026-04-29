@@ -46,8 +46,9 @@ private:
 
     bool m_useCustom{false};
     std::array<QColor, kSliceColorCount> m_customColors;
-    mutable std::array<QString, kSliceColorCount> m_hexCache;
+    std::array<QString, kSliceColorCount> m_hexCache;
 
+    static int safeIdx(int sliceId);
     static QColor defaultActive(int idx);
     static QColor defaultDim(int idx);
     void rebuildHexCache();
