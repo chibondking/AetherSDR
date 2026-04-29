@@ -112,7 +112,7 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
     addDeferred("XVTR",        [this] { return buildXvtrTab(); });
     addDeferred("USB Cables",      [this] { return buildUsbCablesTab(); });
     addDeferred("Peripherals",     [this] { return buildPeripheralsTab(); });
-    addDeferred("UI Enhancements", [this] { return buildUiEnhancementsTab(); });
+    addDeferred("Themes",          [this] { return buildUiEnhancementsTab(); });
 #ifdef HAVE_SERIALPORT
     addDeferred("Serial",          [this] { return buildSerialTab(); });
 #endif
