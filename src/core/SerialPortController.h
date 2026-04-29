@@ -119,6 +119,9 @@ private:
     static constexpr int DEBOUNCE_MS = 20;
 #endif
 
+// On Windows, HAVE_SERIALPORT is typically defined (Qt6::SerialPort ships for Windows),
+// but the QSerialPort code path below is NOT used — the Win32 WaitCommEvent path takes over.
+// The #ifdef HAVE_SERIALPORT guards in dependent files (e.g. MainWindow) are correct.
 #ifdef Q_OS_WIN
     // Win32 path: owns the COM port handle exclusively for WaitCommEvent-based detection
     void*         m_hWin{nullptr};      // Win32 HANDLE cast to void*; nullptr = closed
@@ -137,6 +140,10 @@ private slots:
     QSerialPort   m_port;
     QTimer        m_pollTimer;
     bool          m_pollLogged{false};
+    // Diagnostic state for pollInputPins() logging — kept as members (not statics)
+    // so a hypothetical second instance doesn't share state.
+    QSerialPort::PinoutSignals m_lastRawPins{};
+    bool                       m_lastDebounceLogged{false};
     static constexpr int POLL_INTERVAL_MS = 10;
 
 private slots:

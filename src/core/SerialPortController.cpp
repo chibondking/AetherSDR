@@ -74,6 +74,10 @@ bool SerialPortController::open(const QString& portName, int baudRate,
     DCB dcb = {};
     dcb.DCBlength = sizeof(DCB);
     if (!::GetCommState(hPort, &dcb)) {
+        DWORD err = ::GetLastError();
+        qCWarning(lcDevices) << "SerialPortController: GetCommState failed on" << portName
+                             << "Win32 error" << err;
+        emit errorOccurred(QString("Failed to read port state for %1 (error %2)").arg(portName).arg(err));
         ::CloseHandle(hPort);
         return false;
     }
@@ -90,6 +94,10 @@ bool SerialPortController::open(const QString& portName, int baudRate,
     dcb.fOutxDsrFlow    = FALSE;
     dcb.fDsrSensitivity = FALSE;
     if (!::SetCommState(hPort, &dcb)) {
+        DWORD err = ::GetLastError();
+        qCWarning(lcDevices) << "SerialPortController: SetCommState failed on" << portName
+                             << "Win32 error" << err;
+        emit errorOccurred(QString("Failed to configure %1 (baud/framing, error %2)").arg(portName).arg(err));
         ::CloseHandle(hPort);
         return false;
     }
@@ -443,11 +451,9 @@ void SerialPortController::pollInputPins()
 
     bool hasPttInput = (m_ctsFn == InputFunction::PttInput || m_dsrFn == InputFunction::PttInput);
     if (hasPttInput) {
-        static QSerialPort::PinoutSignals lastRaw{};
-        static bool lastDebounceOk{false};
-        if (pinState != lastRaw || debounceOk != lastDebounceOk || !m_pollLogged) {
-            lastRaw = pinState;
-            lastDebounceOk = debounceOk;
+        if (pinState != m_lastRawPins || debounceOk != m_lastDebounceLogged || !m_pollLogged) {
+            m_lastRawPins = pinState;
+            m_lastDebounceLogged = debounceOk;
             qCDebug(lcDevices)
                 << "SerialPortController poll:"
                 << "raw=" << Qt::hex << static_cast<int>(pinState)
