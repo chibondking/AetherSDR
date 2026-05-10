@@ -8579,13 +8579,11 @@ void MainWindow::onSliceAdded(SliceModel* s)
 
 #if defined(Q_OS_MAC) || defined(HAVE_PIPEWIRE)
         m_audio->setDaxTxMode(isDigital);
-        if (isDigital)
-            m_radioModel.ensureDaxTxStream(DaxTxRequestReason::HostedDaxBridge);
-        // Stream persists on non-digital TX — setDaxTxMode(false) stops audio
-        // without tearing down the stream, so SSDR DAX doesn't race to reclaim it.
-#elif defined(Q_OS_WIN)
-        if (isDigital)
-            m_radioModel.ensureDaxTxStream(DaxTxRequestReason::ExternalDaxRouteOnly);
+        // Stream lifecycle belongs to startDax()/stopDax() — do NOT create here.
+        // Creating a stream without an active DaxBridge produces a dead stream
+        // that blocks SSDR DAX from acquiring the channel ("Busy"), with no
+        // audio benefit since nothing feeds it.  If the bridge is already up,
+        // startDax() already called ensureDaxTxStream(); if not, SSDR DAX owns it.
 #endif
 
 #ifdef HAVE_RADE
