@@ -278,6 +278,8 @@ private:
     bool    m_companderOn{false};
     int     m_companderLevel{0};
     bool    m_daxOn{false};
+    bool    m_daxSent{false};     // last value sent; prevents redundant transmit set dax= bursts
+    bool    m_daxEverSent{false}; // false until first setDax() call after connect/reset
     bool    m_sbMonitor{false};
     int     m_monGainSb{50};
 

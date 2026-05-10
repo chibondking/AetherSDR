@@ -8581,13 +8581,11 @@ void MainWindow::onSliceAdded(SliceModel* s)
         m_audio->setDaxTxMode(isDigital);
         if (isDigital)
             m_radioModel.ensureDaxTxStream(DaxTxRequestReason::HostedDaxBridge);
-        else
-            m_radioModel.releaseDaxTxStream();
+        // Stream persists on non-digital TX — setDaxTxMode(false) stops audio
+        // without tearing down the stream, so SSDR DAX doesn't race to reclaim it.
 #elif defined(Q_OS_WIN)
         if (isDigital)
             m_radioModel.ensureDaxTxStream(DaxTxRequestReason::ExternalDaxRouteOnly);
-        else
-            m_radioModel.releaseDaxTxStream();
 #endif
 
 #ifdef HAVE_RADE

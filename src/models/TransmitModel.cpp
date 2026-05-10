@@ -27,6 +27,7 @@ void TransmitModel::resetState()
     m_memoriesEnabled = false;
     m_usingMemory = false;
     m_showTxInWaterfall = false;
+    m_daxEverSent = false;
 
     emit apdStateChanged();
     emit moxChanged(false);
@@ -521,6 +522,12 @@ void TransmitModel::setSpeechProcessorLevel(int level)
 
 void TransmitModel::setDax(bool on)
 {
+    // Guard: with N slices each emitting txSliceChanged, every TX focus switch
+    // fires this N times.  Only send when the value actually changes to avoid
+    // sending dax=0,0 then dax=1,1 bursts that race with SmartSDR DAX teardown.
+    if (m_daxEverSent && m_daxSent == on) return;
+    m_daxEverSent = true;
+    m_daxSent = on;
     emit commandReady(QString("transmit set dax=%1").arg(on ? 1 : 0));
 }
 
