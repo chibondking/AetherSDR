@@ -8581,9 +8581,13 @@ void MainWindow::onSliceAdded(SliceModel* s)
         m_audio->setDaxTxMode(isDigital);
         if (isDigital)
             m_radioModel.ensureDaxTxStream(DaxTxRequestReason::HostedDaxBridge);
+        else
+            m_radioModel.releaseDaxTxStream();
 #elif defined(Q_OS_WIN)
         if (isDigital)
             m_radioModel.ensureDaxTxStream(DaxTxRequestReason::ExternalDaxRouteOnly);
+        else
+            m_radioModel.releaseDaxTxStream();
 #endif
 
 #ifdef HAVE_RADE

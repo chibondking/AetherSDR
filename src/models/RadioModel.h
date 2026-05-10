@@ -211,6 +211,7 @@ public:
     void resetPanState();
     void createAudioStream();
     bool ensureDaxTxStream(DaxTxRequestReason reason);
+    void releaseDaxTxStream();
     QJsonObject troubleshootingSnapshot() const;
 
     // Memory channel cache
@@ -680,6 +681,7 @@ private:
     bool        m_daxTxActive{false};
     quint32     m_daxTxClientHandle{0};  // Tracked for diagnostics only — not consulted in routing.
     bool        m_daxTxCreatePending{false};
+    bool        m_daxTxReleaseRequested{false}; // release deferred while create is in-flight
     QSet<quint32> m_deadDaxRxSeen;
     QSet<quint32> m_externalDaxTxSeen;
     QSet<quint32> m_externalDaxRxSeen;

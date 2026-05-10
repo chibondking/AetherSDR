@@ -1874,6 +1874,7 @@ void RadioModel::onDisconnected()
     m_daxTxActive = false;
     m_daxTxClientHandle = 0;
     m_daxTxCreatePending = false;
+    m_daxTxReleaseRequested = false;
     m_deadDaxRxSeen.clear();
     m_externalDaxTxSeen.clear();
     m_externalDaxRxSeen.clear();
@@ -4239,6 +4240,7 @@ bool RadioModel::ensureDaxTxStream(DaxTxRequestReason reason)
                     << QStringLiteral("code=%1").arg(hexCode(code))
                     << QStringLiteral("body=%1").arg(body)
                     << QStringLiteral("reason=%1").arg(daxTxRequestReasonName(reason));
+                m_daxTxReleaseRequested = false;
                 return;
             }
 
@@ -4249,6 +4251,7 @@ bool RadioModel::ensureDaxTxStream(DaxTxRequestReason reason)
                     << QStringLiteral("code=0x00000000")
                     << QStringLiteral("body=%1").arg(body)
                     << QStringLiteral("reason=%1").arg(daxTxRequestReasonName(reason));
+                m_daxTxReleaseRequested = false;
                 return;
             }
 
@@ -4258,9 +4261,47 @@ bool RadioModel::ensureDaxTxStream(DaxTxRequestReason reason)
             qCInfo(lcDax).noquote()
                 << "RadioModel: DAX TX create succeeded"
                 << QStringLiteral("stream=%1").arg(hexId(id));
+
+            // TX focus moved away from digital mode while the create was in-flight.
+            if (m_daxTxReleaseRequested) {
+                m_daxTxReleaseRequested = false;
+                releaseDaxTxStream();
+                return;
+            }
+
             emit txAudioStreamReady(id);
         });
     return true;
+}
+
+void RadioModel::releaseDaxTxStream()
+{
+    if (m_daxTxCreatePending) {
+        // Create is in-flight — mark for removal once the callback lands.
+        m_daxTxReleaseRequested = true;
+        qCInfo(lcDax).noquote()
+            << "RadioModel: DAX TX release deferred — create pending";
+        return;
+    }
+
+    if (m_daxTxStreamId == 0) {
+        m_daxTxReleaseRequested = false;
+        qCInfo(lcDax).noquote()
+            << "RadioModel: DAX TX release skipped — no stream";
+        return;
+    }
+
+    const quint32 streamId = m_daxTxStreamId;
+    sendCmd(QString("stream remove %1").arg(RadioStatusOwnership::hexId(streamId)));
+    qCInfo(lcDax).noquote()
+        << "RadioModel: DAX TX stream removed"
+        << QStringLiteral("stream=%1").arg(hexId(streamId));
+
+    m_daxTxStreamId = 0;
+    m_daxTxActive = false;
+    m_daxTxClientHandle = 0;
+    m_daxTxCreatePending = false;
+    m_daxTxReleaseRequested = false;
 }
 
 QJsonObject RadioModel::troubleshootingSnapshot() const
