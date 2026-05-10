@@ -8598,7 +8598,12 @@ void MainWindow::onSliceAdded(SliceModel* s)
     };
     connect(s, &SliceModel::modeChanged, this, updateDaxTxMode);
     connect(s, &SliceModel::txSliceChanged, this, updateDaxTxMode);
-    updateDaxTxMode();  // set initial state from current TX slice mode
+    // Defer the initial evaluation: the radio's transmit dax echo and the
+    // slice's tx=1 / mode= status arrive in the burst AFTER onSliceAdded.
+    // Running immediately would see no TX slice → send dax=0 → SSDR DAX
+    // tears down → rapid 0→1 causes Busy / broken audio.  300 ms matches
+    // the DAX-channel restore delay and is well inside the status burst.
+    QTimer::singleShot(300, this, updateDaxTxMode);
 
     // Push overlay for this slice to the spectrum widget
     pushSliceOverlay(s);

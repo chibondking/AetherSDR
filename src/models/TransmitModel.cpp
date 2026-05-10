@@ -97,6 +97,10 @@ void TransmitModel::applyTransmitStatus(const QMap<QString, QString>& kvs)
     if (kvs.contains("dax")) {
         bool v = kvs["dax"] == "1";
         if (m_daxOn != v) { m_daxOn = v; micChanged = true; }
+        // Keep the sent-state tracker in sync with the radio echo so that
+        // setDax() suppresses redundant commands on reconnect/startup.
+        m_daxSent = v;
+        m_daxEverSent = true;
     }
     if (kvs.contains("sb_monitor")) {
         bool v = kvs["sb_monitor"] == "1";
