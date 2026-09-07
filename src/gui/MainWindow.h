@@ -886,6 +886,15 @@ private:
                                int attemptsRemaining, quint64 generation);
     void createPansSequentially(const QString& layoutId, int total,
                                 std::shared_ptr<QStringList> panIds, int created);
+    // Connect-time panadapter-applet creation, serialised. Building a
+    // SpectrumWidget is a native Wayland/EGL surface creation; doing several
+    // back-to-back during the connect burst overruns the compositor and, under
+    // Crostini/sommelier, drops the Wayland connection mid-connect — which costs
+    // the GL context and, on the virgl driver, segfaults Qt's backing-store
+    // reflush (field crash 2026-09-07). drainPendingPanAppletBuilds() runs one
+    // build per event-loop turn, spaced by kPanAppletBuildStaggerMs.
+    void buildPanadapterAppletFor(PanadapterModel* pan);
+    void drainPendingPanAppletBuilds();
     void showPanadapterSliceCapacityMessage();
     void updatePaTempLabel();
     void showNetworkDiagnosticsDialog();
@@ -1652,6 +1661,10 @@ private:
     int  m_adaptiveFpsCap{0};             // current cap (> 0 when throttle active); shown in network label
     QTimer* m_layoutRestoreTimer{nullptr}; // debounced layout rearrange after pans added on connect
     qint64 m_layoutRestoreUntilMs{0};
+    // FIFO of panIds awaiting applet creation, drained one per event-loop turn
+    // by drainPendingPanAppletBuilds(); see buildPanadapterAppletFor().
+    QStringList m_pendingPanAppletBuilds;
+    bool m_panAppletBuildScheduled{false};
     // WheelApf-while-off hint: wall-clock until which the notice is already
     // on screen, so a spinning knob does not re-upsert the card per detent (#4658).
     qint64 m_apfOffHintUntilMs{0};

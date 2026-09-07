@@ -112,6 +112,12 @@ QString defaultPanLayoutForCount(int panCount)
 constexpr qint64 kXvtrWaterfallDecisionLogIntervalMs = 20000;
 constexpr int kProfileLoadMinRenderableFrameBins = 128;
 
+// Space connect-time panadapter-applet builds this far apart so each new
+// native Wayland/EGL surface lands in its own event-loop turn rather than a
+// burst. Same pacing rationale as createPansSequentially()'s 200 ms
+// inter-create spacing. See MainWindow::buildPanadapterAppletFor().
+constexpr int kPanAppletBuildStaggerMs = 200;
+
 bool profileLoadFrameLooksRenderable(const SpectrumWidget* spectrum, int binCount)
 {
     if (binCount <= 0 || !panPixelDimensionsReady(spectrum)) {
@@ -1784,120 +1790,21 @@ void MainWindow::wirePanLifecycle()
             return;
         }
 
-        PanadapterApplet* applet = nullptr;
-
-        // If applyLayout already created this applet, just wire signals
-        if (m_panStack->panadapter(pan->panId())) {
-            applet = m_panStack->panadapter(pan->panId());
+        // Building the applet creates a SpectrumWidget — a native Wayland/EGL
+        // surface under Qt's RHI. On connect the radio restores its pans in a
+        // burst; creating those surfaces back-to-back on the already-stalled
+        // connect thread overruns the compositor's surface negotiation, and
+        // under Crostini/sommelier the whole Wayland connection is dropped
+        // mid-connect. That costs the GL context and, on the virgl driver,
+        // segfaults Qt's backing-store reflush (field crash 2026-09-07).
+        // Queue the panId; drainPendingPanAppletBuilds() builds one per turn.
+        if (!m_pendingPanAppletBuilds.contains(pan->panId())) {
+            m_pendingPanAppletBuilds.append(pan->panId());
         }
-        // Reuse the "default" placeholder for the first real pan
-        else if (m_panStack->panadapter("default")) {
-            applet = m_panStack->panadapter("default");
-            applet->setPanId(pan->panId());
-            m_panStack->rekey("default", pan->panId());
-        } else {
-            applet = m_panStack->addPanadapter(pan->panId());
-        }
-        setActivePanApplet(applet);
-        wirePanadapter(applet);
-        if (m_panadapterConnectionAnimationVisible) {
-            applet->spectrumWidget()->setConnectionAnimationVisible(
-                true, m_panadapterConnectionAnimationLabel);
-        }
-        connect(pan, &PanadapterModel::infoChanged,
-                applet->spectrumWidget(), &SpectrumWidget::setFrequencyRange);
-        connect(applet->spectrumWidget(), &SpectrumWidget::panGeometryResyncNeeded,
-                this, [this, panId = pan->panId()]() {
-            resyncPanGeometryToView(panId);
-        });
-        connect(pan, &PanadapterModel::infoChanged,
-                this, [this, panId = pan->panId()](double, double) {
-            if (!profileLoadRadioStateWritesHeld()) {
-                recenterCenterLockForPan(panId);
-            }
-        });
-        // NOTE: levelChanged → setDbmRange is wired in wirePanadapter() above;
-        // don't connect it here again or setDbmRange fires twice per level change.
-        connect(pan, &PanadapterModel::rfGainInfoChanged,
-                applet->spectrumWidget()->overlayMenu(),
-                &SpectrumOverlayMenu::setRfGainRange);
-        connect(pan, &PanadapterModel::rfGainInfoChanged,
-                this, [applet](int, int high, int, const QString& unitSuffix) {
-            const int neutral = normalizedRfGainUnitSuffix(unitSuffix)
-                                    == QLatin1String("%") ? high : 0;
-            applet->spectrumWidget()->setRfGainPresentation(unitSuffix, neutral);
-        });
-        connect(pan, &PanadapterModel::rfGainChanged,
-                this, [applet](int gain) {
-            applet->spectrumWidget()->setRfGain(gain);
-            applet->spectrumWidget()->overlayMenu()->setRfGain(gain);
-        });
-        // Discrete front-end stages. Model -> menu for the description and the
-        // current position; menu -> model for the operator's request. The menu
-        // never sets its own state from a click — see the cycle lambda there.
-        connect(pan, &PanadapterModel::preampLabelsChanged,
-                applet->spectrumWidget()->overlayMenu(),
-                &SpectrumOverlayMenu::setPreampLabels);
-        connect(pan, &PanadapterModel::preampStepChanged,
-                applet->spectrumWidget()->overlayMenu(),
-                &SpectrumOverlayMenu::setPreampStep);
-        const auto syncPreampIndicator = [pan, applet]() {
-            applet->spectrumWidget()->setPreampIndicator(
-                formatPreampIndicator(pan->preampLabels(), pan->preampStep()));
-        };
-        connect(pan, &PanadapterModel::preampLabelsChanged,
-                this, [syncPreampIndicator](const QStringList&) {
-            syncPreampIndicator();
-        });
-        connect(pan, &PanadapterModel::preampStepChanged,
-                this, [syncPreampIndicator](int) {
-            syncPreampIndicator();
-        });
-        connect(pan, &PanadapterModel::attenuatorLabelsChanged,
-                applet->spectrumWidget()->overlayMenu(),
-                &SpectrumOverlayMenu::setAttenuatorLabels);
-        connect(pan, &PanadapterModel::attenuatorStepChanged,
-                applet->spectrumWidget()->overlayMenu(),
-                &SpectrumOverlayMenu::setAttenuatorStep);
-        connect(applet->spectrumWidget()->overlayMenu(),
-                &SpectrumOverlayMenu::preampStepChanged,
-                this, [this, panId = pan->panId()](int step) {
-            m_radioModel.setPanPreampFor(panId, step);
-        });
-        connect(applet->spectrumWidget()->overlayMenu(),
-                &SpectrumOverlayMenu::attenuatorStepChanged,
-                this, [this, panId = pan->panId()](int step) {
-            m_radioModel.setPanAttenuatorFor(panId, step);
-        });
-        // Seed from whatever the model already holds: this wiring can run after
-        // the backend has published, and a control built empty would stay empty
-        // until the operator moved something on the radio.
-        applet->spectrumWidget()->overlayMenu()->setRfGainRange(
-            pan->rfGainLow(), pan->rfGainHigh(), pan->rfGainStep(),
-            pan->rfGainUnitSuffix());
-        const int rfGainNeutral = normalizedRfGainUnitSuffix(pan->rfGainUnitSuffix())
-                                      == QLatin1String("%")
-                                    ? pan->rfGainHigh() : 0;
-        applet->spectrumWidget()->setRfGainPresentation(
-            pan->rfGainUnitSuffix(), rfGainNeutral);
-        applet->spectrumWidget()->overlayMenu()->setPreampLabels(pan->preampLabels());
-        applet->spectrumWidget()->overlayMenu()->setPreampStep(pan->preampStep());
-        syncPreampIndicator();
-        applet->spectrumWidget()->overlayMenu()->setAttenuatorLabels(pan->attenuatorLabels());
-        applet->spectrumWidget()->overlayMenu()->setAttenuatorStep(pan->attenuatorStep());
-
-        // Push display dimensions to the radio so it sends full-size FFT bins.
-        // Without this, the radio uses xpixels=50 ypixels=20 (default) and
-        // FFT data is essentially empty/unusable. Use widget width and the
-        // actual FFT pane height for 1:1 bin-to-pixel mapping.
-        auto* sw = applet->spectrumWidget();
-        requestPanDimensionsForRadio(pan->panId(), sw, true);
-
-        qDebug() << "MainWindow: added panadapter applet for" << pan->panId();
-        for (SliceModel* slice : m_radioModel.slices()) {
-            if (slice && slice->panId() == pan->panId()) {
-                reattachSliceVisualsToPanadapter(slice);
-            }
+        if (!m_panAppletBuildScheduled) {
+            m_panAppletBuildScheduled = true;
+            QTimer::singleShot(0, this,
+                               [this]() { drainPendingPanAppletBuilds(); });
         }
 
         // Debounced layout restore: after all pans are added on connect,
@@ -2090,6 +1997,169 @@ void MainWindow::wirePanLifecycle()
         }
     });
 
+}
+
+// One dequeued panId per event-loop turn — serialising the SpectrumWidget /
+// Wayland-surface creations keeps a multi-pan connect from bursting the
+// compositor (see the panadapterAdded handler). A pan can be removed, or its
+// applet built by applyLayout, while this sits queued; both are re-checked.
+void MainWindow::drainPendingPanAppletBuilds()
+{
+    m_panAppletBuildScheduled = false;
+    if (m_shuttingDown || !m_panStack) {
+        m_pendingPanAppletBuilds.clear();
+        return;
+    }
+    if (m_pendingPanAppletBuilds.isEmpty()) {
+        return;
+    }
+
+    const QString panId = m_pendingPanAppletBuilds.takeFirst();
+    if (PanadapterModel* pan = m_radioModel.panadapter(panId);
+        pan && !m_panStack->panadapter(panId)) {
+        buildPanadapterAppletFor(pan);
+    }
+
+    // Hold the debounced layout rearrange off until the queue is empty:
+    // spreading the builds over several hundred ms would otherwise let the
+    // 1 s timer fire on a partially-populated stack for a large multi-pan
+    // restore. The window guard (m_layoutRestoreUntilMs) still bounds it.
+    if (m_layoutRestoreTimer
+        && QDateTime::currentMSecsSinceEpoch() <= m_layoutRestoreUntilMs) {
+        m_layoutRestoreTimer->start();
+    }
+
+    if (!m_pendingPanAppletBuilds.isEmpty()) {
+        m_panAppletBuildScheduled = true;
+        QTimer::singleShot(kPanAppletBuildStaggerMs, this,
+                           [this]() { drainPendingPanAppletBuilds(); });
+    }
+}
+
+// Create and wire one panadapter applet. Extracted verbatim from the
+// panadapterAdded handler so drainPendingPanAppletBuilds() can pace
+// connect-time creation; the body is otherwise unchanged.
+void MainWindow::buildPanadapterAppletFor(PanadapterModel* pan)
+{
+    if (m_shuttingDown || !m_panStack || !pan) {
+        return;
+    }
+
+    PanadapterApplet* applet = nullptr;
+
+    // If applyLayout already created this applet, just wire signals
+    if (m_panStack->panadapter(pan->panId())) {
+        applet = m_panStack->panadapter(pan->panId());
+    }
+    // Reuse the "default" placeholder for the first real pan
+    else if (m_panStack->panadapter("default")) {
+        applet = m_panStack->panadapter("default");
+        applet->setPanId(pan->panId());
+        m_panStack->rekey("default", pan->panId());
+    } else {
+        applet = m_panStack->addPanadapter(pan->panId());
+    }
+    setActivePanApplet(applet);
+    wirePanadapter(applet);
+    if (m_panadapterConnectionAnimationVisible) {
+        applet->spectrumWidget()->setConnectionAnimationVisible(
+            true, m_panadapterConnectionAnimationLabel);
+    }
+    connect(pan, &PanadapterModel::infoChanged,
+            applet->spectrumWidget(), &SpectrumWidget::setFrequencyRange);
+    connect(applet->spectrumWidget(), &SpectrumWidget::panGeometryResyncNeeded,
+            this, [this, panId = pan->panId()]() {
+        resyncPanGeometryToView(panId);
+    });
+    connect(pan, &PanadapterModel::infoChanged,
+            this, [this, panId = pan->panId()](double, double) {
+        if (!profileLoadRadioStateWritesHeld()) {
+            recenterCenterLockForPan(panId);
+        }
+    });
+    // NOTE: levelChanged → setDbmRange is wired in wirePanadapter() above;
+    // don't connect it here again or setDbmRange fires twice per level change.
+    connect(pan, &PanadapterModel::rfGainInfoChanged,
+            applet->spectrumWidget()->overlayMenu(),
+            &SpectrumOverlayMenu::setRfGainRange);
+    connect(pan, &PanadapterModel::rfGainInfoChanged,
+            this, [applet](int, int high, int, const QString& unitSuffix) {
+        const int neutral = normalizedRfGainUnitSuffix(unitSuffix)
+                                == QLatin1String("%") ? high : 0;
+        applet->spectrumWidget()->setRfGainPresentation(unitSuffix, neutral);
+    });
+    connect(pan, &PanadapterModel::rfGainChanged,
+            this, [applet](int gain) {
+        applet->spectrumWidget()->setRfGain(gain);
+        applet->spectrumWidget()->overlayMenu()->setRfGain(gain);
+    });
+    // Discrete front-end stages. Model -> menu for the description and the
+    // current position; menu -> model for the operator's request. The menu
+    // never sets its own state from a click — see the cycle lambda there.
+    connect(pan, &PanadapterModel::preampLabelsChanged,
+            applet->spectrumWidget()->overlayMenu(),
+            &SpectrumOverlayMenu::setPreampLabels);
+    connect(pan, &PanadapterModel::preampStepChanged,
+            applet->spectrumWidget()->overlayMenu(),
+            &SpectrumOverlayMenu::setPreampStep);
+    const auto syncPreampIndicator = [pan, applet]() {
+        applet->spectrumWidget()->setPreampIndicator(
+            formatPreampIndicator(pan->preampLabels(), pan->preampStep()));
+    };
+    connect(pan, &PanadapterModel::preampLabelsChanged,
+            this, [syncPreampIndicator](const QStringList&) {
+        syncPreampIndicator();
+    });
+    connect(pan, &PanadapterModel::preampStepChanged,
+            this, [syncPreampIndicator](int) {
+        syncPreampIndicator();
+    });
+    connect(pan, &PanadapterModel::attenuatorLabelsChanged,
+            applet->spectrumWidget()->overlayMenu(),
+            &SpectrumOverlayMenu::setAttenuatorLabels);
+    connect(pan, &PanadapterModel::attenuatorStepChanged,
+            applet->spectrumWidget()->overlayMenu(),
+            &SpectrumOverlayMenu::setAttenuatorStep);
+    connect(applet->spectrumWidget()->overlayMenu(),
+            &SpectrumOverlayMenu::preampStepChanged,
+            this, [this, panId = pan->panId()](int step) {
+        m_radioModel.setPanPreampFor(panId, step);
+    });
+    connect(applet->spectrumWidget()->overlayMenu(),
+            &SpectrumOverlayMenu::attenuatorStepChanged,
+            this, [this, panId = pan->panId()](int step) {
+        m_radioModel.setPanAttenuatorFor(panId, step);
+    });
+    // Seed from whatever the model already holds: this wiring can run after
+    // the backend has published, and a control built empty would stay empty
+    // until the operator moved something on the radio.
+    applet->spectrumWidget()->overlayMenu()->setRfGainRange(
+        pan->rfGainLow(), pan->rfGainHigh(), pan->rfGainStep(),
+        pan->rfGainUnitSuffix());
+    const int rfGainNeutral = normalizedRfGainUnitSuffix(pan->rfGainUnitSuffix())
+                                  == QLatin1String("%")
+                                ? pan->rfGainHigh() : 0;
+    applet->spectrumWidget()->setRfGainPresentation(
+        pan->rfGainUnitSuffix(), rfGainNeutral);
+    applet->spectrumWidget()->overlayMenu()->setPreampLabels(pan->preampLabels());
+    applet->spectrumWidget()->overlayMenu()->setPreampStep(pan->preampStep());
+    syncPreampIndicator();
+    applet->spectrumWidget()->overlayMenu()->setAttenuatorLabels(pan->attenuatorLabels());
+    applet->spectrumWidget()->overlayMenu()->setAttenuatorStep(pan->attenuatorStep());
+
+    // Push display dimensions to the radio so it sends full-size FFT bins.
+    // Without this, the radio uses xpixels=50 ypixels=20 (default) and
+    // FFT data is essentially empty/unusable. Use widget width and the
+    // actual FFT pane height for 1:1 bin-to-pixel mapping.
+    auto* sw = applet->spectrumWidget();
+    requestPanDimensionsForRadio(pan->panId(), sw, true);
+
+    qDebug() << "MainWindow: added panadapter applet for" << pan->panId();
+    for (SliceModel* slice : m_radioModel.slices()) {
+        if (slice && slice->panId() == pan->panId()) {
+            reattachSliceVisualsToPanadapter(slice);
+        }
+    }
 }
 
 void MainWindow::wireCatPorts()
