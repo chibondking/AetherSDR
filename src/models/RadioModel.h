@@ -1882,16 +1882,23 @@ private:
     QSet<quint32> m_evictedPredecessorHandles;
     QSet<quint32> m_evictionsInFlight;
     QMap<quint32, ForeignPanWrite> m_foreignPanWrites;
-    // Set by noteForeignPanWriteIfAny() the instant it attributes a min_dbm/
-    // max_dbm status to a client other than us on a pan we own, and consumed
-    // (cleared) by handlePanadapterStatus() for that exact same wire line —
-    // messageReceived() and statusReceived() fire synchronously, in that
-    // order, for one parsed line (RadioConnection::processLine), so this
-    // never survives past the status it was set for. Defends the operator's
-    // reference level against a foreign client's writes without touching
-    // ownership/eviction (#3977) or the pan's other fields (center, rfgain,
-    // …), which a third-party rig-control tool legitimately drives.
-    QString m_foreignDbmWriteSkipPanId;
+    // Armed by noteForeignPanWriteIfAny() the instant it attributes a
+    // min_dbm/max_dbm status to a client other than us on a pan we own, and
+    // consumed by handlePanadapterStatus(): while armed for this panId, it
+    // drops decodePanRange() for EVERY status on that pan, not only the one
+    // line that triggered it. That extra reach matters: the radio re-echoes
+    // the now-foreign range to every client as an untagged "S0" broadcast
+    // (handle 0 — see noteForeignPanWriteIfAny's early return), which reaches
+    // handlePanadapterStatus before our own corrective resend's reply can,
+    // and a same-line-only guard let that broadcast straight through to the
+    // display. The short deadline (not a single-shot flag) is what lets this
+    // self-heal once the correction lands, or after a bounded wait if it
+    // doesn't. Defends the operator's reference level against a foreign
+    // client's writes without touching ownership/eviction (#3977) or the
+    // pan's other fields (center, rfgain, …), which a third-party
+    // rig-control tool legitimately drives.
+    QString m_dbmDefensePanId;
+    qint64  m_dbmDefenseDeadlineMs{0};
     void noteForeignPanWriteIfAny(const QString& object,
                                   const QMap<QString, QString>& kvs,
                                   quint32 sourceHandle);

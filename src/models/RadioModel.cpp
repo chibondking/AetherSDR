@@ -9823,14 +9823,21 @@ void RadioModel::noteForeignPanWriteIfAny(const QString& object,
     // This forensics-only counter used to be the only effect of a foreign
     // dBm write: logged (and, for a stale AetherSDR session, opt-in evicted)
     // but otherwise left to reach the display. A third-party client sharing
-    // this pan (observed: another program's own Flex session retuning the
-    // radio) can push its own min_dbm/max_dbm on every retune, silently
-    // overwriting the operator's chosen reference level. Flag the pan so
-    // handlePanadapterStatus() drops just that field from this exact status
-    // line — center/bandwidth/rfgain/etc. from the same foreign client still
-    // apply, since those reflect the retune the operator's tool is meant to
-    // drive.
-    m_foreignDbmWriteSkipPanId = panId;
+    // this pan (observed live: another program's own Flex session retuning
+    // the radio, re-asserting min_dbm/max_dbm on every retune — sometimes
+    // simply echoing back whatever it last saw for the pan) can silently
+    // overwrite the operator's chosen reference level. Arm a short defense
+    // window so handlePanadapterStatus() drops the dBm-range field from
+    // EVERY status on this pan for the next kDbmForeignDefenseMs — not just
+    // this one line — while center/bandwidth/rfgain/etc. from the same
+    // foreign client still apply, since those reflect the retune the
+    // operator's tool is meant to drive. A same-line-only guard was tried
+    // first and measured insufficient: the radio re-echoes the now-foreign
+    // range to every client as an untagged status moments later, ahead of
+    // our own corrective resend below landing.
+    constexpr qint64 kDbmForeignDefenseMs = 500;
+    m_dbmDefensePanId = panId;
+    m_dbmDefenseDeadlineMs = QDateTime::currentMSecsSinceEpoch() + kDbmForeignDefenseMs;
     if (rec.count == 1 || rec.count % 25 == 0) {
         qCWarning(lcProtocol).noquote()
             << "RadioModel: foreign client" << hexId(sourceHandle)
@@ -11702,15 +11709,23 @@ void RadioModel::handlePanadapterStatus(const QString& panId, const QMap<QString
         m_flexBackend->decodePanCenterBandwidth(panId, kvs);
         // #3977/#3951 forensics (noteForeignPanWriteIfAny, called moments ago
         // for this exact wire line via the synchronous messageReceived ->
-        // statusReceived pair) flags a pan the instant it sees a foreign
-        // client write min_dbm/max_dbm to a pan we own. Consume that flag
-        // here rather than letting the same status hand our display's
-        // reference level to whatever range the other client asked for —
-        // its own retunes (center/bandwidth above, rfgain/antenna below)
-        // still apply.
-        if (m_foreignDbmWriteSkipPanId == panId) {
-            m_foreignDbmWriteSkipPanId.clear();
+        // statusReceived pair) arms a short defense window the instant it
+        // sees a foreign client write min_dbm/max_dbm to a pan we own.
+        // While armed, drop decodePanRange() for every status on this pan —
+        // not just the line that triggered it — rather than letting the
+        // radio's own re-broadcast of that now-foreign range (untagged, and
+        // faster than our corrective resend's reply) hand our display's
+        // reference level to whatever range the other client asked for. Its
+        // own retunes (center/bandwidth above, rfgain/antenna below) still
+        // apply either way.
+        if (panId == m_dbmDefensePanId
+            && QDateTime::currentMSecsSinceEpoch() < m_dbmDefenseDeadlineMs) {
+            // Left armed: still within the window, and clearing here would
+            // let the very next echo of the foreign range straight through.
         } else {
+            if (panId == m_dbmDefensePanId) {
+                m_dbmDefensePanId.clear();  // deadline passed — stop rejecting
+            }
             m_flexBackend->decodePanRange(panId, kvs);
         }
         m_flexBackend->decodePanRfGain(panId, kvs);
