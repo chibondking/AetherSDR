@@ -1761,8 +1761,8 @@ void MainWindow::wirePanLifecycle()
         if (m_applyingLayout) return;
 
         // Skip if this pan already has an applet
-        if (m_panStack->panadapter(pan->panId())) {
-            if (auto* sw = m_panStack->spectrum(pan->panId())) {
+        if (auto* applet = m_panStack->panadapter(pan->panId())) {
+            if (auto* sw = applet->spectrumWidget()) {
                 auto* menu = sw->overlayMenu();
                 menu->setPanId(pan->panId());
                 menu->setRadioModel(&m_radioModel);
@@ -1773,6 +1773,20 @@ void MainWindow::wirePanLifecycle()
                 applyTuningRangeToOverlayMenu(menu);
                 applyNotchCapabilities(sw);
                 applyRadioSideDspToPanDisplay(sw);
+                // A reconnect hands us a brand-new PanadapterModel for this
+                // panId (reclaimed pans never reach panadapterAdded), so its
+                // levelChanged/wideChanged/wnbStateChanged have no listener yet.
+                // Route them through wirePanadapter() — same as a freshly
+                // created applet — rather than hand-rolling a subset here: a
+                // prior direct `connect(pan, levelChanged, sw, setDbmRange)`
+                // bypassed the dBm-range handshake entirely, so a stale or
+                // out-of-order radio echo (e.g. the radio's last-committed
+                // range, re-broadcast after an unrelated status update) could
+                // snap the display straight back over a range the operator had
+                // just set, with nothing left to hold the requested value.
+                // wirePanadapter() is disconnect-guarded up front specifically
+                // so it can be re-run like this.
+                wirePanadapter(applet);
                 connect(pan, &PanadapterModel::infoChanged,
                         sw, &SpectrumWidget::setFrequencyRange);
                 // Re-push authoritative geometry when a gesture that was
@@ -1790,31 +1804,11 @@ void MainWindow::wirePanLifecycle()
                         recenterCenterLockForPan(panId);
                     }
                 });
-                connect(pan, &PanadapterModel::levelChanged,
-                        sw, [sw](float minDbm, float maxDbm) {
-                    if (sw->isDraggingDbmScale()) {
-                        return;
-                    }
-                    sw->setDbmRange(minDbm, maxDbm);
-                });
-                connect(pan, &PanadapterModel::wideChanged,
-                        sw, &SpectrumWidget::setWideActive);
-                sw->setWideActive(pan->wideActive());
-                connect(pan, &PanadapterModel::wnbStateChanged,
-                        sw, &SpectrumWidget::syncWnbState,
-                        Qt::UniqueConnection);
-                connect(pan, &PanadapterModel::wnbStateChanged,
-                        sw->overlayMenu(), &SpectrumOverlayMenu::syncWnbState,
-                        Qt::UniqueConnection);
-                sw->syncWnbState(pan->wnbActive(), pan->wnbLevel(),
-                                 pan->wnbUpdating());
-                sw->overlayMenu()->syncWnbState(pan->wnbActive(),
-                                                pan->wnbLevel(),
-                                                pan->wnbUpdating());
-                // Prime the spectrum widget with the pan's current dBm range on
-                // reconnect so the noise-floor auto-adjust starts from the correct
-                // position. (#3034)
-                sw->setDbmRange(pan->minDbm(), pan->maxDbm());
+                // NOTE: levelChanged → setDbmRange (plus wideChanged,
+                // wnbStateChanged, and the dBm-range priming) is wired by
+                // wirePanadapter() above; don't reconnect it here or
+                // setDbmRange fires twice per level change — once handshake-
+                // aware, once not.
             }
             for (SliceModel* slice : m_radioModel.slices()) {
                 if (slice && slice->panId() == pan->panId()) {
