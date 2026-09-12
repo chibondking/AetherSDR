@@ -1882,6 +1882,16 @@ private:
     QSet<quint32> m_evictedPredecessorHandles;
     QSet<quint32> m_evictionsInFlight;
     QMap<quint32, ForeignPanWrite> m_foreignPanWrites;
+    // Set by noteForeignPanWriteIfAny() the instant it attributes a min_dbm/
+    // max_dbm status to a client other than us on a pan we own, and consumed
+    // (cleared) by handlePanadapterStatus() for that exact same wire line —
+    // messageReceived() and statusReceived() fire synchronously, in that
+    // order, for one parsed line (RadioConnection::processLine), so this
+    // never survives past the status it was set for. Defends the operator's
+    // reference level against a foreign client's writes without touching
+    // ownership/eviction (#3977) or the pan's other fields (center, rfgain,
+    // …), which a third-party rig-control tool legitimately drives.
+    QString m_foreignDbmWriteSkipPanId;
     void noteForeignPanWriteIfAny(const QString& object,
                                   const QMap<QString, QString>& kvs,
                                   quint32 sourceHandle);

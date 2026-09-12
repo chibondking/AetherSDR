@@ -9820,11 +9820,38 @@ void RadioModel::noteForeignPanWriteIfAny(const QString& object,
     rec.count++;
     rec.panId = panId;
     rec.lastMs = QDateTime::currentMSecsSinceEpoch();
+    // This forensics-only counter used to be the only effect of a foreign
+    // dBm write: logged (and, for a stale AetherSDR session, opt-in evicted)
+    // but otherwise left to reach the display. A third-party client sharing
+    // this pan (observed: another program's own Flex session retuning the
+    // radio) can push its own min_dbm/max_dbm on every retune, silently
+    // overwriting the operator's chosen reference level. Flag the pan so
+    // handlePanadapterStatus() drops just that field from this exact status
+    // line — center/bandwidth/rfgain/etc. from the same foreign client still
+    // apply, since those reflect the retune the operator's tool is meant to
+    // drive.
+    m_foreignDbmWriteSkipPanId = panId;
     if (rec.count == 1 || rec.count % 25 == 0) {
         qCWarning(lcProtocol).noquote()
             << "RadioModel: foreign client" << hexId(sourceHandle)
             << "is adjusting OUR pan" << panId << "dBm range —"
             << rec.count << "writes so far (#3977)";
+    }
+
+    // Suppressing the local update above (handlePanadapterStatus) is not
+    // enough on its own: the RADIO's encoder has already switched to the
+    // foreign client's range, so every FFT bin it sends from here on is
+    // scaled against that range, not the one our display (and PanadapterStream's
+    // decoder) still shows. Left alone, the trace would silently read wrong —
+    // not just the axis label — until something else happened to touch the
+    // scale. Re-assert our own last-good range to pull the radio's encoder
+    // back into agreement with what we're already displaying.
+    if (m_flexBackend && std::isfinite(pan->minDbm()) && std::isfinite(pan->maxDbm())
+        && pan->maxDbm() > pan->minDbm()) {
+        sendCmd(QStringLiteral("display pan set %1 min_dbm=%2 max_dbm=%3")
+                    .arg(panId)
+                    .arg(static_cast<double>(pan->minDbm()), 0, 'f', 2)
+                    .arg(static_cast<double>(pan->maxDbm()), 0, 'f', 2));
     }
 
     // Evidence-based eviction (#3951): three strikes AND the offender is
@@ -11673,7 +11700,19 @@ void RadioModel::handlePanadapterStatus(const QString& panId, const QMap<QString
     // legacy signals/side-effects the old inline code owned.
     if (m_flexBackend) {
         m_flexBackend->decodePanCenterBandwidth(panId, kvs);
-        m_flexBackend->decodePanRange(panId, kvs);
+        // #3977/#3951 forensics (noteForeignPanWriteIfAny, called moments ago
+        // for this exact wire line via the synchronous messageReceived ->
+        // statusReceived pair) flags a pan the instant it sees a foreign
+        // client write min_dbm/max_dbm to a pan we own. Consume that flag
+        // here rather than letting the same status hand our display's
+        // reference level to whatever range the other client asked for —
+        // its own retunes (center/bandwidth above, rfgain/antenna below)
+        // still apply.
+        if (m_foreignDbmWriteSkipPanId == panId) {
+            m_foreignDbmWriteSkipPanId.clear();
+        } else {
+            m_flexBackend->decodePanRange(panId, kvs);
+        }
         m_flexBackend->decodePanRfGain(panId, kvs);
         m_flexBackend->decodePanAntenna(panId, kvs);
         m_flexBackend->decodePanExtensions(panId, kvs);
