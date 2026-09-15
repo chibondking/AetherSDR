@@ -137,7 +137,13 @@ void MainWindow::buildMenuBar()
         openRadioSetupPage();
     });
 
-    auto* flexControlAction = settingsMenu->addAction("AetherControl...");
+    // ── Control Dials ────────────────────────────────────────────────────
+    // Every rotary-control integration — AetherControl's own tuning knob,
+    // MIDI control surfaces, the Icom RC-28, the Ulanzi ESP32 dial — under
+    // one submenu instead of scattered individually through Settings.
+    auto* controlDialsMenu = settingsMenu->addMenu("Control Dials");
+
+    auto* flexControlAction = controlDialsMenu->addAction("AetherControl...");
     m_aetherControlAction = flexControlAction;
     flexControlAction->setVisible(true); // capability-gated after connection
     flexControlAction->setMenuRole(QAction::NoRole);
@@ -152,7 +158,7 @@ void MainWindow::buildMenuBar()
     // (RadioSetupDialog.cpp) and the AetherControl "Settings…" button
     // (MainWindow_Controllers.cpp) that offers the same deep-link from
     // inside the controller window.
-    auto* flexControlKnobAction = settingsMenu->addAction("FlexControl Knob & Buttons...");
+    auto* flexControlKnobAction = controlDialsMenu->addAction("FlexControl Knob & Buttons...");
     m_flexControlKnobAction = flexControlKnobAction;
     flexControlKnobAction->setVisible(true); // capability-gated after connection
     flexControlKnobAction->setMenuRole(QAction::NoRole);
@@ -343,13 +349,13 @@ void MainWindow::buildMenuBar()
         showNetSchedulerDialog();
     });
 #ifdef HAVE_MIDI
-    auto* midiAction = settingsMenu->addAction("MIDI Mapping...");
+    auto* midiAction = controlDialsMenu->addAction("MIDI Mapping...");
     connect(midiAction, &QAction::triggered, this, [this] {
         showOrRaisePersistent(m_midiDialog, m_midiControl);
     });
 #endif
 #ifdef HAVE_HIDAPI
-    auto* rc28Action = settingsMenu->addAction("Icom RC-28 Remote Encoder...");
+    auto* rc28Action = controlDialsMenu->addAction("Icom RC-28 Remote Encoder...");
     connect(rc28Action, &QAction::triggered, this, [this] {
         const bool fresh = !m_rc28MappingDialog;
         showOrRaisePersistent(m_rc28MappingDialog, m_hidEncoder);
@@ -372,7 +378,7 @@ void MainWindow::buildMenuBar()
             });
     });
 #endif
-    auto* ulanziAction = settingsMenu->addAction("Ulanzi Dial Mapping...");
+    auto* ulanziAction = controlDialsMenu->addAction("Ulanzi Dial Mapping...");
     connect(ulanziAction, &QAction::triggered, this, [this] {
 #ifdef HAVE_MIDI
         MidiControlManager* midi = m_midiControl;
