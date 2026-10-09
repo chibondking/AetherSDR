@@ -1035,6 +1035,9 @@ protected:
     void wheelEvent(QWheelEvent* event) override;
     bool event(QEvent* event) override;
     bool eventFilter(QObject* watched, QEvent* event) override;
+    // Watch the current top-level window's UpdateRequest, where the VFO flags
+    // are moved before each repaint (#6270); re-run when the window changes.
+    void watchWindowForFlagSync();
     void leaveEvent(QEvent* event) override;
 
 public:
@@ -1907,6 +1910,7 @@ private:
     // Shared cross-pan repaint coalescer (owned by PanadapterStack). QPointer so
     // a teardown reorder can't leave a dangling scheduler here. (#4139)
     QPointer<PanadapterRenderScheduler> m_renderScheduler;
+    QPointer<QWidget> m_flagSyncWindow;     // top-level whose UpdateRequest moves the flags (#6270)
     void coalescedUpdate();                 // update(), coalesced into one present per slot
     // VFO passband drag state (#404)
     bool m_draggingVfo{false};

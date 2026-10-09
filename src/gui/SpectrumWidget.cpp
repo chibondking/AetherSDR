@@ -11652,6 +11652,10 @@ bool SpectrumWidget::event(QEvent* ev)
     if (ev->type() == QEvent::WinIdChange || ev->type() == QEvent::ParentChange) {
         setMouseTracking(true);
     }
+    // Docking or popping out changes the top-level window the flags sync on.
+    if (ev->type() == QEvent::ParentChange || ev->type() == QEvent::Show) {
+        watchWindowForFlagSync();
+    }
 
     if (ev->type() == QEvent::NativeGesture) {
         auto* ge = static_cast<QNativeGestureEvent*>(ev);
@@ -11709,8 +11713,34 @@ bool SpectrumWidget::event(QEvent* ev)
     return SPECTRUM_BASE_CLASS::event(ev);
 }
 
+void SpectrumWidget::watchWindowForFlagSync()
+{
+    QWidget* top = window();
+    if (top == m_flagSyncWindow) {
+        return;
+    }
+    if (m_flagSyncWindow) {
+        m_flagSyncWindow->removeEventFilter(this);
+    }
+    m_flagSyncWindow = (top && top != this) ? top : nullptr;
+    if (m_flagSyncWindow) {
+        m_flagSyncWindow->installEventFilter(this);
+    }
+}
+
 bool SpectrumWidget::eventFilter(QObject* watched, QEvent* event)
 {
+    // The window's UpdateRequest comes just before each repaint: the VFO
+    // flags are child widgets, so they move here, outside the paint pass.
+    // Moving them during paint leaves a stale strip at a fractional
+    // device-pixel ratio (#6270).
+    if (watched == m_flagSyncWindow && event->type() == QEvent::UpdateRequest) {
+        if (isVisible()) {
+            repositionVfoFlags(QRect(0, 0, width(), spectrumPixelHeight()));
+        }
+        return SPECTRUM_BASE_CLASS::eventFilter(watched, event);
+    }
+
     QWidget* widget = qobject_cast<QWidget*>(watched);
     if (!widget || anyDragActive()) {
         return SPECTRUM_BASE_CLASS::eventFilter(watched, event);
@@ -14208,10 +14238,9 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
             m_frequencyScalePreviewNeedsUpload = false;
         }
 
-        // Position flags before painting the cached off-screen indicators:
-        // their rectangles must use the same frame's VFO geometry.
-        // Live-flag selection stays outside this render callback.
-        repositionVfoFlags(specRect);
+        // The flags were positioned for this frame before the paint pass
+        // (eventFilter, the window's UpdateRequest), so the off-screen
+        // indicators below read the same frame's VFO geometry.
 
         // Background-image layer — kept separate from the static overlay so
         // it can render BELOW the FFT trace (parity with software paint).
@@ -15217,9 +15246,9 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
     drawWaterfallTimeMarkersGpu(cb);
     cb->endPass();
 
-    // VFO flag/widget repositioning now runs earlier (repositionVfoFlags(),
-    // before the flag-layer render) so GPU-composited flags follow the marker
-    // without a one-frame lag (#3617).
+    // VFO flags are positioned before the paint pass (eventFilter's
+    // UpdateRequest), in the same frame, so they follow the marker without a
+    // one-frame lag (#3617).
 
     raisePanadapterMessageOverlay();
 
@@ -15442,7 +15471,7 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
     // see kEdgeTaperFraction's own comment for why, and renderGpuFrame()'s
     // mirrored comment at its own former overlay site.
 
-    repositionVfoFlags(specRect);
+    // VFO flags were positioned before this paint (eventFilter, #6270).
     if (is3D && m_threeDSliceDepth) {
         drawDssDepthGeometry(
             p, buildDssDepthGeometry(specRect, dssFrameFloorDbm));
