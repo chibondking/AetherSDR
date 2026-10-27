@@ -265,9 +265,18 @@ void removal()
         check(seen == QStringList{QStringLiteral("0x40000001")}, "panAboutToRemove fires once with the closing pan's ID");
         check(removed && fps >= 0 && wf >= 0 && remove > fps && remove > wf,
               "a rate write from panAboutToRemove goes out before the removal, which still proceeds");
-        seen.clear();
+    }
+    {
+        // Its own fixture: a removal stays in the model until the radio
+        // reports it, so after the close above 0x40000000 is not yet the
+        // last pan.
+        PanControlFixture f;
+        f.publish(QStringLiteral("0x40000000"));
         f.clear();
-        check(!f.radio.removePanadapter(QStringLiteral("0x40000000")) && seen.isEmpty(),
+        bool announced = false;
+        QObject::connect(&f.radio, &RadioModel::panAboutToRemove, &f.radio,
+                         [&](const QString&) { announced = true; });
+        check(!f.radio.removePanadapter(QStringLiteral("0x40000000")) && !announced,
               "a refused close (last pan) does not announce panAboutToRemove");
     }
     for (bool reassigned : {false, true}) {
