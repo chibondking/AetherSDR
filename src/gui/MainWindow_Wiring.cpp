@@ -4822,18 +4822,29 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         }
     });
     connect(menu, &SpectrumOverlayMenu::fftFpsChanged,
-            this, [this, applet, sw](int v) {
-        sw->setFftFps(v);  // always update restore target for when throttle lifts
-        // The operator's value, saved before the throttle test: the adaptive
-        // cap is transient and must not decide what is remembered.
-        scheduleClientFftFpsSave(sw->panIndex(), v);
-        if (m_adaptiveThrottleActive)
-            return;
-        // Through the model, not a raw sendCommand: on a backend that streams
-        // raw spectra this is the engine's own shaping target, and the Flex wire
-        // text it used to send reached nothing there — the slider moved the
-        // widget's render cap while frames kept arriving at the IQ sample rate.
-        m_radioModel.requestPanDisplayRates(applet->panId(), v, /*wfMs=*/0);
+            this, [this, applet](int v) {
+        // One operator choice for every open pan: an FFT FPS is how much
+        // display traffic the operator wants, not a per-pan property. This is
+        // a one-off request per pan (the slider's own signal, never a status
+        // echo); each radio still stores what it is sent, per band.
+        QList<PanadapterApplet*> targets = m_panStack ? m_panStack->allApplets()
+                                                      : QList<PanadapterApplet*>{};
+        if (!targets.contains(applet)) targets.append(applet);
+        for (auto* target : targets) {
+            auto* tsw = target ? target->spectrumWidget() : nullptr;
+            if (!tsw) continue;
+            tsw->setFftFps(v);  // always update restore target for when throttle lifts
+            // The operator's value, saved before the throttle test: the adaptive
+            // cap is transient and must not decide what is remembered.
+            scheduleClientFftFpsSave(tsw->panIndex(), v);
+            if (m_adaptiveThrottleActive)
+                continue;
+            // Through the model, not a raw sendCommand: on a backend that streams
+            // raw spectra this is the engine's own shaping target, and the Flex wire
+            // text it used to send reached nothing there — the slider moved the
+            // widget's render cap while frames kept arriving at the IQ sample rate.
+            m_radioModel.requestPanDisplayRates(target->panId(), v, /*wfMs=*/0);
+        }
     });
     connect(menu, &SpectrumOverlayMenu::fftWeightedAverageChanged,
             this, [this, applet, sw](bool on) {
